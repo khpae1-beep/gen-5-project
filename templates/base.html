@@ -1,0 +1,21 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}AutoMLOps Suite{% endblock %}</title>
+</head>
+<body>
+  <nav>
+    <a href="/">AutoMLOps Suite</a>
+    <a href="/deployments/">Deployments</a>
+    <a href="/monitoring/">Monitoring</a>
+    <a href="/experiments/">Experiments</a>
+    <a href="/tuning/">Tuning</a>
+  </nav>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>
