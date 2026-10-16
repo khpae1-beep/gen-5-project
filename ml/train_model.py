@@ -1,7 +1,7 @@
 
 # AutoMLOps Suite
 # Member 1: Khaliyah Paen
-# Step 2: Heart Disease Model Training
+# Heart Disease Model Training
 
 from pathlib import Path
 import joblib

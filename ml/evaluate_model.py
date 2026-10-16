@@ -1,7 +1,7 @@
 # AutoMLOps Suite
 # Member 1: Khaliyah Paen
-# Step 3: Heart Disease Model Evaluation
-# Dataset Source: Kaggle Heart Disease Dataset
+# Heart Disease Model Evaluation
+
 
 from pathlib import Path
 import json
