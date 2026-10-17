@@ -362,8 +362,9 @@ class SummaryTests(TestCase):
 
     def test_compute_metrics_summarises_by_default(self):
         llm = FakeLLM(reply='All good.')
-        with mock.patch('monitoring.summary.get_llm', return_value=llm):
+        with mock.patch('monitoring.summary.get_llm', return_value=llm) as get_llm:
             call_command('compute_metrics', stdout=mock.Mock())
+        get_llm.assert_called_once_with(temperature=0)
         self.assertEqual(len(llm.prompts), 1)
         self.assertEqual(self.latest().summary, 'All good.')
 

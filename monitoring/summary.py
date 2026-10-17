@@ -75,7 +75,7 @@ def _ask_llm(llm, prompt):
 def summarize_model(model_name, llm=None, recent=RECENT_WINDOWS):
     """Summarise the model's most recent snapshots and save the text on its latest snapshot.
 
-    Uses get_llm() unless an llm is passed. If the LLM call fails, saves a rule-based summary
+    Uses get_llm(temperature=0), for consistent summaries, unless an llm is passed. If the LLM call fails, saves a rule-based summary
     that says the LLM was unavailable. Returns (latest snapshot, whether the LLM was used),
     or (None, False) when the model has no snapshots.
     """
@@ -91,7 +91,7 @@ def summarize_model(model_name, llm=None, recent=RECENT_WINDOWS):
     ][-recent:]
 
     try:
-        summary = _ask_llm(llm or get_llm(), build_prompt(model_name, windows, baseline))
+        summary = _ask_llm(llm or get_llm(temperature=0), build_prompt(model_name, windows, baseline))
         used_llm = True
     except Exception as exc:  # Any provider failure (e.g. Ollama not running) falls back to the rules.
         summary = (
