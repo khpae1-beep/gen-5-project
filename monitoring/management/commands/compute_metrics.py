@@ -2,6 +2,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 from monitoring.metrics import DEFAULT_WINDOW_SIZE, compute_snapshots
 from monitoring.models import PredictionLog
+from monitoring.summary import summarize_model
 
 
 class Command(BaseCommand):
@@ -9,7 +10,8 @@ class Command(BaseCommand):
         'Group each model\'s PredictionLog rows into windows of --window-size predictions and save '
         'one MetricSnapshot per window, replacing that model\'s old snapshots. Windows are flagged '
         'as anomalies when accuracy falls more than 0.10 below MONITORING_BASELINE_ACCURACY or average '
-        'latency is more than double the median of the earlier windows.'
+        'latency is more than double the median of the earlier windows. Unless --no-llm is passed, '
+        'the latest snapshot gets an LLM summary, or a rule-based one if the LLM is unavailable.'
     )
 
     def add_arguments(self, parser):
@@ -19,6 +21,7 @@ class Command(BaseCommand):
             default=DEFAULT_WINDOW_SIZE,
             help=f'Predictions per window (default {DEFAULT_WINDOW_SIZE}).',
         )
+        parser.add_argument('--no-llm', action='store_true', help='Skip the summary of the latest snapshot.')
 
     def handle(self, *args, **options):
         window_size = options['window_size']
@@ -37,3 +40,7 @@ class Command(BaseCommand):
                 f'{model_name}: saved {len(snapshots)} snapshots of {window_size} predictions, '
                 f'{anomalies} anomalous ({leftover} waiting for the next window).'
             ))
+            if snapshots and not options['no_llm']:
+                _, used_llm = summarize_model(model_name)
+                source = 'LLM' if used_llm else 'rule-based (LLM unavailable)'
+                self.stdout.write(f'{model_name}: saved {source} summary on the latest snapshot.')
