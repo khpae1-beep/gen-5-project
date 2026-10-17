@@ -12,21 +12,26 @@ def _format_accuracy(accuracy):
 
 def build_prompt(model_name, windows, baseline):
     """windows is a list of (window number, snapshot, anomaly reasons), oldest first."""
+    first, latest = windows[0][0], windows[-1][0]
     lines = [
-        f'Window {number} ({snapshot.count} predictions): accuracy {_format_accuracy(snapshot.accuracy)}, '
-        f'average latency {snapshot.avg_latency_ms:.1f} ms'
+        f'Window {number}{" (LATEST)" if number == latest else ""} ({snapshot.count} predictions): '
+        f'accuracy {_format_accuracy(snapshot.accuracy)}, average latency {snapshot.avg_latency_ms:.1f} ms'
         + (f', ANOMALY: {"; ".join(reasons)}' if reasons else '')
         for number, snapshot, reasons in windows
     ]
     return (
         f'You are monitoring the machine learning model "{model_name}". Its expected accuracy (baseline) is '
         f'{baseline:.2f}. A window is anomalous when accuracy is more than 0.10 below the baseline or average '
-        'latency is more than double the median of the earlier windows. These are its most recent windows, '
-        'oldest first:\n\n'
+        'latency is more than double the median of the earlier windows.\n\n'
+        f'These are windows {first} to {latest}, listed in time order from oldest to newest. Higher window '
+        f'numbers are more recent. Window {latest} is the latest (current) window; every other window is '
+        'earlier.\n\n'
         + '\n'.join(lines)
         + '\n\nIn 3 to 5 plain-English sentences for a non-expert, explain how the model is performing, the '
-        'anomalies marked ANOMALY above and what they might mean. Only describe the anomalies listed; if none are '
-        'listed, say there are none. Use the numbers exactly as given. Do not use bullet points or headings.'
+        'anomalies marked ANOMALY above and what they might mean. Refer to windows by their numbers. When you '
+        f'describe current or latest performance, use window {latest} only. Only describe the anomalies listed; '
+        'if none are listed, say there are none. Use the numbers exactly as given. Do not use bullet points or '
+        'headings.'
     )
 
 

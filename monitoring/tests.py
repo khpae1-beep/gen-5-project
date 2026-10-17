@@ -302,8 +302,25 @@ class SummaryTests(TestCase):
         self.assertTrue(used_llm)
         self.assertEqual(self.latest().summary, 'Accuracy fell sharply in window 2.')
         self.assertEqual(snapshot.pk, self.latest().pk)
-        self.assertIn('Window 2 (10 predictions): accuracy 0.00', llm.prompts[0])
+        self.assertIn('Window 2 (LATEST) (10 predictions): accuracy 0.00', llm.prompts[0])
+        self.assertIn('Window 1 (10 predictions)', llm.prompts[0])
+        self.assertIn('Window 2 is the latest (current) window', llm.prompts[0])
         self.assertIn('ANOMALY: accuracy 0.00 is 0.75 below the 0.75 baseline', llm.prompts[0])
+
+    def test_prompt_lists_recent_windows_in_order_with_latest_marked(self):
+        log_predictions([(1, 1)] * 30)
+        compute_snapshots('heart_disease', window_size=10)  # Windows 1 to 5.
+        llm = FakeLLM(reply='Fine.')
+
+        summarize_model('heart_disease', llm=llm, recent=3)
+
+        prompt = llm.prompts[0]
+        self.assertIn('These are windows 3 to 5, listed in time order', prompt)
+        self.assertIn('use window 5 only', prompt)
+        positions = [prompt.index(f'Window {n}') for n in ('3 (', '4 (', '5 (LATEST)')]
+        self.assertEqual(positions, sorted(positions))
+        self.assertNotIn('Window 2 (', prompt)
+        self.assertEqual(prompt.count('(LATEST)'), 1)
 
     def test_falls_back_to_rules_when_llm_fails(self):
         _, used_llm = summarize_model('heart_disease', llm=FakeLLM(error=ConnectionError('refused')))
