@@ -63,7 +63,7 @@ See `.env.example` for the full list:
 
 ## Monitoring
 
-The `monitoring` app logs model predictions sent through RabbitMQ.
+The `monitoring` app logs model predictions sent through RabbitMQ, groups them into windows, flags anomalies and shows them on a dashboard.
 
 1. Start RabbitMQ and apply migrations:
 
@@ -85,11 +85,54 @@ The `monitoring` app logs model predictions sent through RabbitMQ.
    python manage.py publish_predictions --count 100 --drift
    ```
 
-   `--drift` makes accuracy drop halfway through the run. `--delay 0.5` waits between messages.
+   | Option | Effect |
+   | --- | --- |
+   | `--count N` | Number of predictions (default 100). |
+   | `--drift` | Accuracy drops halfway through the run. |
+   | `--delay 0.5` | Seconds to wait between messages. |
+   | `--data path.csv` | Predict on this CSV instead of the first of `ml/data/heart.csv`, `data/heart.csv` or `heart.csv`. A missing CSV or model is then an error. |
+   | `--all-rows` | Sample every row of the CSV instead of only the held-out test rows (see below). |
 
-`publish_predictions` uses the real heart disease model only after you run Khaliyah's `ml/train_model.py`, which creates `models/heart_disease_model.joblib`. It predicts on random rows of `heart.csv`, taken from the first of `ml/data/heart.csv`, `data/heart.csv` or `heart.csv` in the project root that exists. Without the model or the CSV, it publishes simulated predictions.
+4. Compute metrics, then open the dashboard at http://127.0.0.1:8000/monitoring/ (with `python manage.py runserver` running):
 
-Logged predictions and metric snapshots are visible in the Django admin.
+   ```bash
+   python manage.py compute_metrics
+   ```
+
+### Which model is published
+
+`publish_predictions` serves `models/heart_disease_model.joblib`. Create it by training and promoting a run (see [Experiment tracking](#experiment-tracking)):
+
+```bash
+python manage.py train_experiment
+python manage.py promote_run heart-disease-rf 1
+```
+
+Running Khaliyah's `ml/train_model.py` also creates that file. Without the model or a CSV, `publish_predictions` publishes simulated predictions (version `simulated`).
+
+Each message's `model_version` is the promoted run's version (for example `v2`), or `v1` if no run has been promoted. `publish_predictions` loads the model when it starts, so run it again after promoting.
+
+By default, it samples only the rows the model was **not** trained on. It repeats `train_experiment`'s split (drop duplicates, stratified split) with the promoted run's `test_size` and `random_state`, or 0.2 and 42 if there is no promoted run. Accuracy then matches the run's test accuracy (about 0.75 for the default settings). With `--all-rows`, most rows were in the training data, so accuracy looks much higher (about 0.95). The command prints which mode it used.
+
+### Metrics and anomalies
+
+`compute_metrics` groups each model's predictions into windows of `--window-size` predictions (default 10), in the order they were made, and saves one `MetricSnapshot` per window with accuracy, average latency and count. It replaces that model's earlier snapshots, and leaves the last window out until it is full. A window is an anomaly when:
+
+- accuracy is more than 0.10 below the baseline, `MONITORING_BASELINE_ACCURACY` in `config/settings.py` (default 0.75, the model's test accuracy), or
+- average latency is more than double the median of the earlier windows.
+
+It then asks the LLM from `LLM_PROVIDER` for a short plain-English summary of the recent windows and saves it on the latest snapshot. If the LLM is unavailable, it saves a rule-based summary instead; `--no-llm` skips the summary.
+
+### Dashboard
+
+http://127.0.0.1:8000/monitoring/ shows, for one model (choose another from the menu when there are several):
+
+- total predictions, overall accuracy, average latency and the number of anomalous windows;
+- accuracy and latency per window, with the baseline as a dashed line and windows flagged by that chart's rule in red;
+- the latest saved summary (the page never calls the LLM itself);
+- the 20 most recent predictions, with their model version.
+
+Run `compute_metrics` again to update the charts and summary. Predictions and snapshots are also in the Django admin.
 
 ## Experiment tracking
 
@@ -145,15 +188,7 @@ This copies that run's model to `models/heart_disease_model.joblib`, the file `p
 
 ### The promoted version in monitoring
 
-`publish_predictions` loads the model when it starts, so run it again after promoting. Each prediction it publishes then has the promoted version as its `model_version` (for example `v2`), and that version appears in the Version column of the recent predictions table at http://127.0.0.1:8000/monitoring/ and on `PredictionLog` rows in the admin. If `models/current_model.json` does not exist, the real model is published as `v1`.
-
-To predict on a specific CSV, pass `--data`:
-
-```bash
-python manage.py publish_predictions --count 100 --data ml/data/heart.csv
-```
-
-With `--data`, a missing CSV or model is an error instead of a fallback to simulated predictions.
+`publish_predictions` loads the model when it starts, so run it again after promoting. Each prediction it publishes then has the promoted version as its `model_version` (for example `v2`), shown in the Version column of the recent predictions table at http://127.0.0.1:8000/monitoring/ and on `PredictionLog` rows in the admin. It samples that run's held-out test rows, so monitored accuracy is comparable with the run's test accuracy. See [Monitoring](#monitoring) for the options.
 
 ## Tests
 
