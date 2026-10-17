@@ -10,7 +10,12 @@ from django.utils import timezone
 from monitoring.rabbitmq import PREDICTIONS_QUEUE, open_channel
 
 MODEL_PATH = settings.BASE_DIR / 'models' / 'heart_disease_model.joblib'
-DATA_PATH = settings.BASE_DIR / 'heart.csv'
+# Checked in order; the first one that exists is used.
+DATA_PATHS = [
+    settings.BASE_DIR / 'ml' / 'data' / 'heart.csv',
+    settings.BASE_DIR / 'data' / 'heart.csv',
+    settings.BASE_DIR / 'heart.csv',
+]
 LABEL_COLUMN = 'target'
 MODEL_NAME = 'heart_disease'
 
@@ -29,6 +34,10 @@ def build_message(model_name, model_version, prediction, actual, latency_ms):
         'latency_ms': round(float(latency_ms), 3),
         'timestamp': timezone.now().isoformat(),
     }
+
+
+def find_data_path():
+    return next((path for path in DATA_PATHS if path.exists()), None)
 
 
 class HeartDiseasePredictor:
@@ -71,8 +80,8 @@ class SimulatedPredictor:
 class Command(BaseCommand):
     help = (
         f'Publish predictions as JSON to the {PREDICTIONS_QUEUE!r} RabbitMQ queue. Uses '
-        'models/heart_disease_model.joblib on random rows of heart.csv when both exist, '
-        'otherwise simulated predictions.'
+        'models/heart_disease_model.joblib on random rows of heart.csv (ml/data/, data/ or the '
+        'project root) when both exist, otherwise simulated predictions.'
     )
 
     def add_arguments(self, parser):
@@ -129,8 +138,9 @@ class Command(BaseCommand):
         ))
 
     def get_predictor(self):
-        if MODEL_PATH.exists() and DATA_PATH.exists():
-            self.stdout.write(f'Using {MODEL_PATH.name} on rows from {DATA_PATH.name}.')
-            return HeartDiseasePredictor(MODEL_PATH, DATA_PATH)
-        self.stdout.write(f'{MODEL_PATH.name} or {DATA_PATH.name} not found; publishing simulated predictions.')
+        data_path = find_data_path()
+        if MODEL_PATH.exists() and data_path:
+            self.stdout.write(f'Using {MODEL_PATH.name} on rows from {data_path.relative_to(settings.BASE_DIR)}.')
+            return HeartDiseasePredictor(MODEL_PATH, data_path)
+        self.stdout.write(f'{MODEL_PATH.name} or heart.csv not found; publishing simulated predictions.')
         return SimulatedPredictor()

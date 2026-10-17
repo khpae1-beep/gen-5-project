@@ -1,11 +1,14 @@
 import json
+import tempfile
 from datetime import datetime, timezone as dt_timezone
+from pathlib import Path
 from unittest import mock
 
 from django.test import TestCase
 
 from monitoring.management.commands.consume_predictions import Command as ConsumeCommand
-from monitoring.management.commands.publish_predictions import build_message
+from monitoring.management.commands import publish_predictions
+from monitoring.management.commands.publish_predictions import build_message, find_data_path
 from monitoring.messages import InvalidMessage, handle_prediction_message
 from monitoring.models import PredictionLog
 
@@ -100,3 +103,17 @@ class ConsumeOnMessageTests(TestCase):
         self.channel.basic_nack.assert_called_once_with(delivery_tag=7, requeue=False)
         self.channel.basic_ack.assert_not_called()
         self.assertEqual(PredictionLog.objects.count(), 0)
+
+
+class FindDataPathTests(TestCase):
+    def test_uses_first_existing_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = [Path(tmp) / name for name in ('first.csv', 'second.csv', 'third.csv')]
+            with mock.patch.object(publish_predictions, 'DATA_PATHS', paths):
+                self.assertIsNone(find_data_path())
+                paths[2].touch()
+                self.assertEqual(find_data_path(), paths[2])
+                paths[1].touch()
+                self.assertEqual(find_data_path(), paths[1])
+                paths[0].touch()
+                self.assertEqual(find_data_path(), paths[0])
