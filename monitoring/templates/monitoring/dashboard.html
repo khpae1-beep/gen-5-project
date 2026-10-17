@@ -1,0 +1,178 @@
+{% extends 'base.html' %}
+
+{% block title %}Monitoring · AutoMLOps Suite{% endblock %}
+
+{% block content %}
+<style>
+  .monitoring { max-width: 1100px; margin: 0 auto; padding: 0 16px 48px; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #1f2933; }
+  .monitoring h1 { margin-bottom: 4px; }
+  .monitoring .muted { color: #616e7c; }
+  .monitoring .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr)); gap: 12px; margin: 20px 0; }
+  .monitoring .card { border: 1px solid #d9e2ec; border-radius: 8px; padding: 14px 16px; background: #fff; }
+  .monitoring .card .label { font-size: 0.85rem; color: #616e7c; }
+  .monitoring .card .value { font-size: 1.6rem; font-weight: 600; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .monitoring .card .value.alert { color: #c81e1e; }
+  .monitoring .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 16px; }
+  .monitoring .chart { border: 1px solid #d9e2ec; border-radius: 8px; padding: 12px 16px; background: #fff; }
+  .monitoring .chart h2 { font-size: 1rem; margin: 0 0 8px; }
+  .monitoring .chart-box { position: relative; height: 260px; }
+  .monitoring .summary { border-left: 4px solid #3e7bfa; background: #f5f8ff; padding: 12px 16px; border-radius: 4px; white-space: pre-line; line-height: 1.5; }
+  .monitoring .table-wrap { overflow-x: auto; }
+  .monitoring table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  .monitoring th, .monitoring td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #e4e7eb; white-space: nowrap; }
+  .monitoring th { font-size: 0.85rem; color: #616e7c; font-weight: 600; }
+  .monitoring .wrong { color: #c81e1e; }
+  .monitoring .right { color: #18794e; }
+  .monitoring .empty { border: 1px dashed #bcccdc; border-radius: 8px; padding: 16px; }
+  .monitoring code { background: #f0f4f8; padding: 1px 5px; border-radius: 4px; }
+</style>
+
+<div class="monitoring">
+  <h1>Model monitoring</h1>
+
+  {% if not model_name %}
+    <p class="empty">No predictions logged yet. Run <code>python manage.py consume_predictions</code> and <code>python manage.py publish_predictions</code>, then <code>python manage.py compute_metrics</code>.</p>
+  {% else %}
+    <div class="muted">
+      {% if model_names|length > 1 %}
+        <form method="get" style="display: inline">
+          <label for="model">Model</label>
+          <select id="model" name="model" onchange="this.form.submit()">
+            {% for name in model_names %}<option value="{{ name }}"{% if name == model_name %} selected{% endif %}>{{ name }}</option>{% endfor %}
+          </select>
+          <noscript><button type="submit">Show</button></noscript>
+        </form>
+      {% else %}
+        Model <strong>{{ model_name }}</strong>
+      {% endif %}
+      · baseline accuracy {{ baseline|floatformat:2 }} · {{ window_count }} window{{ window_count|pluralize }}
+    </div>
+
+    <section class="cards" aria-label="Summary">
+      <div class="card"><div class="label">Total predictions</div><div class="value">{{ total_predictions }}</div></div>
+      <div class="card"><div class="label">Overall accuracy</div><div class="value">{% if overall_accuracy is not None %}{{ overall_accuracy|floatformat:2 }}{% else %}–{% endif %}</div></div>
+      <div class="card"><div class="label">Average latency</div><div class="value">{{ avg_latency_ms|floatformat:1 }} ms</div></div>
+      <div class="card"><div class="label">Anomalous windows</div><div class="value{% if anomaly_count %} alert{% endif %}">{{ anomaly_count }}</div></div>
+    </section>
+
+    {% if window_count %}
+      <section class="charts">
+        <div class="chart">
+          <h2>Accuracy per window</h2>
+          <div class="chart-box"><canvas id="accuracy-chart" aria-label="Accuracy per window, with anomalous windows in red and the baseline as a dashed line" role="img"></canvas></div>
+        </div>
+        <div class="chart">
+          <h2>Average latency per window (ms)</h2>
+          <div class="chart-box"><canvas id="latency-chart" aria-label="Average latency per window, with anomalous windows in red" role="img"></canvas></div>
+        </div>
+      </section>
+      <p class="muted">Red points are anomalous windows.</p>
+
+      <h2>Latest summary</h2>
+      {% if latest_snapshot.summary %}
+        <div class="summary">{{ latest_snapshot.summary }}</div>
+        <p class="muted">For the window ending {{ latest_snapshot.window_end|date:"Y-m-d H:i:s" }}.</p>
+      {% else %}
+        <p class="empty">No summary yet. Run <code>python manage.py compute_metrics</code> without <code>--no-llm</code>.</p>
+      {% endif %}
+    {% else %}
+      <p class="empty">No metric windows yet. Run <code>python manage.py compute_metrics</code>.</p>
+    {% endif %}
+
+    <h2>Recent predictions</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Time</th><th>Version</th><th>Prediction</th><th>Actual</th><th>Correct</th><th>Latency (ms)</th></tr>
+        </thead>
+        <tbody>
+          {% for log in recent_predictions %}
+            <tr>
+              <td>{{ log.timestamp|date:"Y-m-d H:i:s" }}</td>
+              <td>{{ log.model_version }}</td>
+              <td>{{ log.prediction }}</td>
+              <td>{% if log.actual is not None %}{{ log.actual }}{% else %}–{% endif %}</td>
+              <td>{% if log.is_correct is None %}–{% elif log.is_correct %}<span class="right">Yes</span>{% else %}<span class="wrong">No</span>{% endif %}</td>
+              <td>{{ log.latency_ms|floatformat:1 }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+</div>
+
+{% if window_count %}
+  {{ chart_data|json_script:"chart-data" }}
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+  <script>
+    (function () {
+      const data = JSON.parse(document.getElementById('chart-data').textContent);
+      const RED = '#c81e1e';
+      const pointColors = (color) => data.anomaly.map((a) => (a ? RED : color));
+      const pointRadii = data.anomaly.map((a) => (a ? 6 : 3));
+      const tooltip = {
+        callbacks: { footer: (items) => (data.anomaly[items[0].dataIndex] ? 'Anomalous window' : '') },
+      };
+
+      new Chart(document.getElementById('accuracy-chart'), {
+        type: 'line',
+        data: {
+          labels: data.labels,
+          datasets: [
+            {
+              label: 'Accuracy',
+              data: data.accuracy,
+              borderColor: '#3e7bfa',
+              pointBackgroundColor: pointColors('#3e7bfa'),
+              pointBorderColor: pointColors('#3e7bfa'),
+              pointRadius: pointRadii,
+              spanGaps: true,
+              tension: 0.2,
+            },
+            {
+              label: 'Baseline',
+              data: data.labels.map(() => data.baseline),
+              borderColor: '#7b8794',
+              borderDash: [6, 4],
+              borderWidth: 1.5,
+              pointRadius: 0,
+              pointHitRadius: 0,
+            },
+          ],
+        },
+        options: {
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          scales: { y: { min: 0, max: 1, title: { display: true, text: 'Accuracy' } } },
+          plugins: { tooltip },
+        },
+      });
+
+      new Chart(document.getElementById('latency-chart'), {
+        type: 'line',
+        data: {
+          labels: data.labels,
+          datasets: [
+            {
+              label: 'Average latency (ms)',
+              data: data.latency,
+              borderColor: '#2f9e8f',
+              pointBackgroundColor: pointColors('#2f9e8f'),
+              pointBorderColor: pointColors('#2f9e8f'),
+              pointRadius: pointRadii,
+              tension: 0.2,
+            },
+          ],
+        },
+        options: {
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          scales: { y: { beginAtZero: true, title: { display: true, text: 'ms' } } },
+          plugins: { tooltip, legend: { display: false } },
+        },
+      });
+    })();
+  </script>
+{% endif %}
+{% endblock %}
