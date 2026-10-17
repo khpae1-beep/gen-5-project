@@ -10,6 +10,9 @@ from django.utils import timezone
 from monitoring.rabbitmq import PREDICTIONS_QUEUE, open_channel
 
 MODEL_PATH = settings.BASE_DIR / 'models' / 'heart_disease_model.joblib'
+# Written by the experiments app's promote_run; says which run MODEL_PATH came from.
+CURRENT_MODEL_INFO_PATH = settings.BASE_DIR / 'models' / 'current_model.json'
+DEFAULT_MODEL_VERSION = 'v1'
 # Checked in order; the first one that exists is used.
 DATA_PATHS = [
     settings.BASE_DIR / 'ml' / 'data' / 'heart.csv',
@@ -40,15 +43,24 @@ def find_data_path():
     return next((path for path in DATA_PATHS if path.exists()), None)
 
 
+def promoted_version():
+    """'v<N>' from current_model.json, or None if there is no usable file."""
+    try:
+        with open(CURRENT_MODEL_INFO_PATH, encoding='utf-8') as f:
+            version = json.load(f)['version']
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return f'v{version}' if isinstance(version, int) else None
+
+
 class HeartDiseasePredictor:
     """Runs the trained heart disease model on random rows of heart.csv."""
 
-    version = 'v1'
-
-    def __init__(self, model_path, data_path):
+    def __init__(self, model_path, data_path, version=DEFAULT_MODEL_VERSION):
         import joblib
         import pandas as pd
 
+        self.version = version
         self.model = joblib.load(model_path)
         data = pd.read_csv(data_path)
         if LABEL_COLUMN not in data.columns:
@@ -140,7 +152,10 @@ class Command(BaseCommand):
     def get_predictor(self):
         data_path = find_data_path()
         if MODEL_PATH.exists() and data_path:
-            self.stdout.write(f'Using {MODEL_PATH.name} on rows from {data_path.relative_to(settings.BASE_DIR)}.')
-            return HeartDiseasePredictor(MODEL_PATH, data_path)
+            version = promoted_version() or DEFAULT_MODEL_VERSION
+            self.stdout.write(
+                f'Using {MODEL_PATH.name} ({version}) on rows from {data_path.relative_to(settings.BASE_DIR)}.'
+            )
+            return HeartDiseasePredictor(MODEL_PATH, data_path, version)
         self.stdout.write(f'{MODEL_PATH.name} or heart.csv not found; publishing simulated predictions.')
         return SimulatedPredictor()
