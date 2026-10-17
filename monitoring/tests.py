@@ -573,6 +573,34 @@ def summary_windows(*windows, baseline=0.75):
     ]
 
 
+class SummaryPromptTests(TestCase):
+    def test_lists_flagged_windows_as_the_only_anomalies(self):
+        windows = summary_windows((0.80, 10), (0.70, 12), (0.40, 11), (0.79, 30))
+
+        prompt = build_prompt('heart_disease', windows, 0.75)
+
+        self.assertIn(
+            'Flagged windows (the ONLY anomalies): window 3 (accuracy 0.40 is 0.35 below the 0.75 baseline); '
+            'window 4 (average latency 30.0 ms is 2.7 times the earlier median of 11.0 ms).',
+            prompt,
+        )
+        self.assertIn('Only the flagged windows listed above are anomalies.', prompt)
+        self.assertIn('Do not call any other window an anomaly, anomalous, flagged or a problem.', prompt)
+        self.assertIn('slightly below the baseline but is not flagged is normal variation', prompt)
+        self.assertIn('Mention every flagged window by its number', prompt)
+        self.assertNotIn('No windows are flagged.', prompt)
+
+    def test_says_when_no_windows_are_flagged(self):
+        # Window 2 is below the 0.75 baseline but not by more than 0.10, so it is not flagged.
+        prompt = build_prompt('heart_disease', summary_windows((0.80, 10), (0.70, 12)), 0.75)
+
+        self.assertIn('No windows are flagged.', prompt)
+        self.assertIn('Do not call any window an anomaly, anomalous, flagged or a problem.', prompt)
+        self.assertIn('slightly below the baseline but is not flagged is normal variation', prompt)
+        self.assertIn('say that there are no anomalies', prompt)
+        self.assertNotIn('ANOMALY', prompt)
+
+
 class FactCheckTests(TestCase):
     def setUp(self):
         # Window 3 is an accuracy anomaly, window 4 a latency anomaly (median of 10, 12, 11 is 11 ms).

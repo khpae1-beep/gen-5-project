@@ -39,6 +39,15 @@ def build_prompt(model_name, windows, baseline):
         + (f', ANOMALY: {"; ".join(reasons)}' if reasons else '')
         for number, snapshot, reasons in windows
     ]
+    flagged = [(number, reasons) for number, _, reasons in windows if reasons]
+    if flagged:
+        flagged_text = (
+            'Flagged windows (the ONLY anomalies): '
+            + '; '.join(f'window {number} ({"; ".join(reasons)})' for number, reasons in flagged)
+            + '.'
+        )
+    else:
+        flagged_text = 'No windows are flagged.'
     return (
         f'You are monitoring the machine learning model "{model_name}". Its expected accuracy (baseline) is '
         f'{baseline:.2f}. A window is anomalous when accuracy is more than 0.10 below the baseline or average '
@@ -47,12 +56,21 @@ def build_prompt(model_name, windows, baseline):
         f'numbers are more recent. Window {latest} is the latest (current) window; every other window is '
         'earlier.\n\n'
         + '\n'.join(lines)
-        + '\n\nIn 3 to 5 plain-English sentences for a non-expert, explain how the model is performing, the '
-        'anomalies marked ANOMALY above and what they might mean. Refer to windows by their numbers. When you '
-        f'describe current or latest performance, use window {latest} only. Mention every window marked ANOMALY '
-        'by its number together with the word "anomaly", and do not call any other window an anomaly; if none '
-        'are marked, say there are no anomalies. Use the numbers exactly as given. Do not use bullet points or '
-        'headings.'
+        + f'\n\n{flagged_text}\n\n'
+        + (
+            'Only the flagged windows listed above are anomalies. Do not call any other window an anomaly, '
+            'anomalous, flagged or a problem. A window whose accuracy is slightly below the baseline but is not '
+            'flagged is normal variation, not a problem.\n\n'
+            if flagged else
+            'No window is an anomaly. Do not call any window an anomaly, anomalous, flagged or a problem. A window '
+            'whose accuracy is slightly below the baseline but is not flagged is normal variation, not a problem.'
+            '\n\n'
+        )
+        + 'In 3 to 5 plain-English sentences for a non-expert, explain how the model is performing'
+        + (', the flagged windows and what they might mean. Mention every flagged window by its number together '
+           'with the word "anomaly".' if flagged else ' and say that there are no anomalies.')
+        + f' Refer to windows by their numbers. When you describe current or latest performance, use window '
+        f'{latest} only. Use the numbers exactly as given. Do not use bullet points or headings.'
     )
 
 
