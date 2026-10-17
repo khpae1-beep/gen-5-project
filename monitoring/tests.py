@@ -1,3 +1,4 @@
+import io
 import json
 import tempfile
 from datetime import datetime, timedelta, timezone as dt_timezone
@@ -126,7 +127,7 @@ class FindDataPathTests(TestCase):
                 self.assertEqual(find_data_path(), paths[0])
 
 
-class PromotedVersionTests(TestCase):
+class PublisherFilesMixin:
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -136,6 +137,21 @@ class PromotedVersionTests(TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
+    def make_model_and_data(self, name='heart.csv', rows=3):
+        """A trivial model that always predicts 1, and a CSV with the given number of rows."""
+        import joblib
+        import pandas as pd
+        from sklearn.dummy import DummyClassifier
+
+        data = pd.DataFrame({'age': range(50, 50 + rows), 'target': [0] + [1] * (rows - 1)})
+        data_path = self.tmp / name
+        data.to_csv(data_path, index=False)
+        model_path = self.tmp / 'model.joblib'
+        joblib.dump(DummyClassifier(strategy='most_frequent').fit(data[['age']], data['target']), model_path)
+        return model_path, data_path
+
+
+class PromotedVersionTests(PublisherFilesMixin, TestCase):
     def test_reads_version_from_current_model_json(self):
         self.assertIsNone(promoted_version())
         self.info.write_text(json.dumps({'experiment': 'heart-disease-rf', 'version': 3}))
@@ -148,26 +164,50 @@ class PromotedVersionTests(TestCase):
                 self.assertIsNone(promoted_version())
 
     def test_real_model_is_published_with_promoted_version(self):
-        import joblib
-        import pandas as pd
-        from sklearn.dummy import DummyClassifier
-
-        data = pd.DataFrame({'age': [50, 60, 70], 'target': [0, 1, 1]})
-        data_path = self.tmp / 'heart.csv'
-        data.to_csv(data_path, index=False)
-        model_path = self.tmp / 'model.joblib'
-        joblib.dump(DummyClassifier(strategy='most_frequent').fit(data[['age']], data['target']), model_path)
+        model_path, data_path = self.make_model_and_data()
         command = publish_predictions.Command(stdout=mock.Mock())
 
         with mock.patch.object(publish_predictions, 'MODEL_PATH', model_path), \
-                mock.patch.object(publish_predictions, 'DATA_PATHS', [data_path]), \
-                mock.patch.object(publish_predictions.settings, 'BASE_DIR', self.tmp):
+                mock.patch.object(publish_predictions, 'DATA_PATHS', [data_path]):
             self.assertEqual(command.get_predictor().version, 'v1')
             self.info.write_text(json.dumps({'experiment': 'heart-disease-rf', 'version': 4}))
             predictor = command.get_predictor()
 
         self.assertEqual(predictor.version, 'v4')
         self.assertEqual(predictor.predict()[0], 1)
+
+
+class PublishDataOptionTests(PublisherFilesMixin, TestCase):
+    def test_uses_given_csv_instead_of_default_locations(self):
+        model_path, default_csv = self.make_model_and_data()
+        _, chosen_csv = self.make_model_and_data('chosen.csv', rows=7)
+        command = publish_predictions.Command(stdout=io.StringIO())
+
+        with mock.patch.object(publish_predictions, 'MODEL_PATH', model_path), \
+                mock.patch.object(publish_predictions, 'DATA_PATHS', [default_csv]):
+            predictor = command.get_predictor(str(chosen_csv))
+
+        self.assertEqual(len(predictor.features), 7)
+        self.assertIn(f'on rows from {chosen_csv}', command.stdout.getvalue())
+
+    def test_errors_instead_of_simulating(self):
+        _, data_path = self.make_model_and_data()
+        cases = {
+            'missing csv': ([str(self.tmp / 'missing.csv')], self.tmp / 'model.joblib'),
+            'missing model': ([str(data_path)], self.tmp / 'no-model.joblib'),
+        }
+        for case, (args, model_path) in cases.items():
+            with self.subTest(case), mock.patch.object(publish_predictions, 'MODEL_PATH', model_path), \
+                    mock.patch('monitoring.management.commands.publish_predictions.open_channel') as open_channel:
+                with self.assertRaises(CommandError):
+                    call_command('publish_predictions', '--data', *args, stdout=io.StringIO())
+                open_channel.assert_not_called()
+
+    def test_without_data_still_falls_back_to_simulated(self):
+        command = publish_predictions.Command(stdout=io.StringIO())
+        with mock.patch.object(publish_predictions, 'MODEL_PATH', self.tmp / 'no-model.joblib'), \
+                mock.patch.object(publish_predictions, 'DATA_PATHS', []):
+            self.assertIsInstance(command.get_predictor(), publish_predictions.SimulatedPredictor)
 
 
 def log_predictions(results, model_name='heart_disease', latency_ms=10.0, timestamp=T0):

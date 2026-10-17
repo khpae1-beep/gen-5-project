@@ -1,6 +1,7 @@
 import json
 import random
 import time
+from pathlib import Path
 
 import pika
 from django.conf import settings
@@ -41,6 +42,14 @@ def build_message(model_name, model_version, prediction, actual, latency_ms):
 
 def find_data_path():
     return next((path for path in DATA_PATHS if path.exists()), None)
+
+
+def display_path(path):
+    """Relative to the project when inside it, otherwise as given."""
+    try:
+        return str(Path(path).resolve().relative_to(settings.BASE_DIR.resolve()))
+    except ValueError:
+        return str(path)
 
 
 def promoted_version():
@@ -92,8 +101,8 @@ class SimulatedPredictor:
 class Command(BaseCommand):
     help = (
         f'Publish predictions as JSON to the {PREDICTIONS_QUEUE!r} RabbitMQ queue. Uses '
-        'models/heart_disease_model.joblib on random rows of heart.csv (ml/data/, data/ or the '
-        'project root) when both exist, otherwise simulated predictions.'
+        'models/heart_disease_model.joblib on random rows of --data, or of heart.csv from ml/data/, data/ '
+        'or the project root, when both exist; otherwise simulated predictions.'
     )
 
     def add_arguments(self, parser):
@@ -104,13 +113,18 @@ class Command(BaseCommand):
             help='Halfway through, start flipping some predictions so accuracy drops.',
         )
         parser.add_argument('--delay', type=float, default=0.0, help='Seconds to wait between messages (default 0).')
+        parser.add_argument(
+            '--data',
+            help='CSV with a "target" column to predict on. Default: ml/data/heart.csv, data/heart.csv or '
+                 'heart.csv, whichever exists first.',
+        )
 
     def handle(self, *args, **options):
         count = options['count']
         if count < 1:
             raise CommandError('--count must be at least 1.')
 
-        predictor = self.get_predictor()
+        predictor = self.get_predictor(options['data'])
         drift_start = count // 2 if options['drift'] else None
 
         try:
@@ -149,13 +163,22 @@ class Command(BaseCommand):
             f'Published {count} predictions to {PREDICTIONS_QUEUE!r} (accuracy {correct / count:.1%}).'
         ))
 
-    def get_predictor(self):
-        data_path = find_data_path()
+    def get_predictor(self, data=None):
+        if data:
+            # An explicit CSV means real predictions are wanted, so don't fall back to simulated ones.
+            data_path = Path(data)
+            if not data_path.exists():
+                raise CommandError(f'Data file {data} not found.')
+            if not MODEL_PATH.exists():
+                raise CommandError(
+                    f'{display_path(MODEL_PATH)} not found. Train and promote a model first '
+                    '(train_experiment, then promote_run).'
+                )
+        else:
+            data_path = find_data_path()
         if MODEL_PATH.exists() and data_path:
             version = promoted_version() or DEFAULT_MODEL_VERSION
-            self.stdout.write(
-                f'Using {MODEL_PATH.name} ({version}) on rows from {data_path.relative_to(settings.BASE_DIR)}.'
-            )
+            self.stdout.write(f'Using {MODEL_PATH.name} ({version}) on rows from {display_path(data_path)}.')
             return HeartDiseasePredictor(MODEL_PATH, data_path, version)
         self.stdout.write(f'{MODEL_PATH.name} or heart.csv not found; publishing simulated predictions.')
         return SimulatedPredictor()
