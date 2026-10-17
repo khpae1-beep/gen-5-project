@@ -61,6 +61,36 @@ See `.env.example` for the full list:
 | `OPENAI_API_KEY` | Required when `LLM_PROVIDER=openai` | none |
 | `OLLAMA_BASE_URL` | Ollama server URL | `http://localhost:11434` |
 
+## Monitoring
+
+The `monitoring` app logs model predictions sent through RabbitMQ.
+
+1. Start RabbitMQ and apply migrations:
+
+   ```bash
+   docker compose up -d
+   python manage.py migrate
+   ```
+
+2. In one terminal, start the consumer. It saves each message from the `predictions` queue as a `PredictionLog` row; stop it with Ctrl+C:
+
+   ```bash
+   python manage.py consume_predictions
+   ```
+
+3. In another terminal, publish predictions:
+
+   ```bash
+   python manage.py publish_predictions --count 100
+   python manage.py publish_predictions --count 100 --drift
+   ```
+
+   `--drift` makes accuracy drop halfway through the run. `--delay 0.5` waits between messages.
+
+`publish_predictions` uses the real heart disease model only after you run Khaliyah's `ml/train_model.py`, which creates `models/heart_disease_model.joblib`. It predicts on random rows of `heart.csv`, taken from the first of `ml/data/heart.csv`, `data/heart.csv` or `heart.csv` in the project root that exists. Without the model or the CSV, it publishes simulated predictions.
+
+Logged predictions and metric snapshots are visible in the Django admin.
+
 ## Tests
 
 ```bash
