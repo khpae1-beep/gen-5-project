@@ -11,7 +11,7 @@ from django.urls import reverse
 
 from monitoring.management.commands.consume_predictions import Command as ConsumeCommand
 from monitoring.management.commands import publish_predictions
-from monitoring.management.commands.publish_predictions import build_message, find_data_path
+from monitoring.management.commands.publish_predictions import build_message, find_data_path, promoted_version
 from monitoring.messages import InvalidMessage, handle_prediction_message
 from monitoring.metrics import compute_snapshots, flag_anomalies
 from monitoring.models import MetricSnapshot, PredictionLog
@@ -124,6 +124,50 @@ class FindDataPathTests(TestCase):
                 self.assertEqual(find_data_path(), paths[1])
                 paths[0].touch()
                 self.assertEqual(find_data_path(), paths[0])
+
+
+class PromotedVersionTests(TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name)
+        self.info = self.tmp / 'current_model.json'
+        patcher = mock.patch.object(publish_predictions, 'CURRENT_MODEL_INFO_PATH', self.info)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_reads_version_from_current_model_json(self):
+        self.assertIsNone(promoted_version())
+        self.info.write_text(json.dumps({'experiment': 'heart-disease-rf', 'version': 3}))
+        self.assertEqual(promoted_version(), 'v3')
+
+    def test_ignores_unusable_files(self):
+        for content in ('not json', '[]', '{}', '{"version": "3"}'):
+            with self.subTest(content):
+                self.info.write_text(content)
+                self.assertIsNone(promoted_version())
+
+    def test_real_model_is_published_with_promoted_version(self):
+        import joblib
+        import pandas as pd
+        from sklearn.dummy import DummyClassifier
+
+        data = pd.DataFrame({'age': [50, 60, 70], 'target': [0, 1, 1]})
+        data_path = self.tmp / 'heart.csv'
+        data.to_csv(data_path, index=False)
+        model_path = self.tmp / 'model.joblib'
+        joblib.dump(DummyClassifier(strategy='most_frequent').fit(data[['age']], data['target']), model_path)
+        command = publish_predictions.Command(stdout=mock.Mock())
+
+        with mock.patch.object(publish_predictions, 'MODEL_PATH', model_path), \
+                mock.patch.object(publish_predictions, 'DATA_PATHS', [data_path]), \
+                mock.patch.object(publish_predictions.settings, 'BASE_DIR', self.tmp):
+            self.assertEqual(command.get_predictor().version, 'v1')
+            self.info.write_text(json.dumps({'experiment': 'heart-disease-rf', 'version': 4}))
+            predictor = command.get_predictor()
+
+        self.assertEqual(predictor.version, 'v4')
+        self.assertEqual(predictor.predict()[0], 1)
 
 
 def log_predictions(results, model_name='heart_disease', latency_ms=10.0, timestamp=T0):
