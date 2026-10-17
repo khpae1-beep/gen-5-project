@@ -1,0 +1,136 @@
+import json
+import random
+import time
+
+import pika
+from django.conf import settings
+from django.core.management.base import BaseCommand, CommandError
+from django.utils import timezone
+
+from monitoring.rabbitmq import PREDICTIONS_QUEUE, open_channel
+
+MODEL_PATH = settings.BASE_DIR / 'models' / 'heart_disease_model.joblib'
+DATA_PATH = settings.BASE_DIR / 'heart.csv'
+LABEL_COLUMN = 'target'
+MODEL_NAME = 'heart_disease'
+
+# Simulated predictions are right this often before drift starts.
+SIMULATED_ACCURACY = 0.9
+# Once drift starts, each prediction is flipped with this probability.
+DRIFT_FLIP_RATE = 0.4
+
+
+def build_message(model_name, model_version, prediction, actual, latency_ms):
+    return {
+        'model_name': model_name,
+        'model_version': model_version,
+        'prediction': int(prediction),
+        'actual': None if actual is None else int(actual),
+        'latency_ms': round(float(latency_ms), 3),
+        'timestamp': timezone.now().isoformat(),
+    }
+
+
+class HeartDiseasePredictor:
+    """Runs the trained heart disease model on random rows of heart.csv."""
+
+    version = 'v1'
+
+    def __init__(self, model_path, data_path):
+        import joblib
+        import pandas as pd
+
+        self.model = joblib.load(model_path)
+        data = pd.read_csv(data_path)
+        if LABEL_COLUMN not in data.columns:
+            raise CommandError(f'{data_path} has no {LABEL_COLUMN!r} column.')
+        self.features = data.drop(columns=[LABEL_COLUMN])
+        self.labels = data[LABEL_COLUMN]
+
+    def predict(self):
+        i = random.randrange(len(self.features))
+        row = self.features.iloc[[i]]
+        start = time.perf_counter()
+        prediction = int(self.model.predict(row)[0])
+        latency_ms = (time.perf_counter() - start) * 1000
+        return prediction, int(self.labels.iloc[i]), latency_ms
+
+
+class SimulatedPredictor:
+    """Stand-in used when the trained model or dataset is not available."""
+
+    version = 'simulated'
+
+    def predict(self):
+        actual = random.randint(0, 1)
+        prediction = actual if random.random() < SIMULATED_ACCURACY else 1 - actual
+        latency_ms = max(1.0, random.gauss(20, 5))
+        return prediction, actual, latency_ms
+
+
+class Command(BaseCommand):
+    help = (
+        f'Publish predictions as JSON to the {PREDICTIONS_QUEUE!r} RabbitMQ queue. Uses '
+        'models/heart_disease_model.joblib on random rows of heart.csv when both exist, '
+        'otherwise simulated predictions.'
+    )
+
+    def add_arguments(self, parser):
+        parser.add_argument('--count', type=int, default=100, help='Number of predictions to publish (default 100).')
+        parser.add_argument(
+            '--drift',
+            action='store_true',
+            help='Halfway through, start flipping some predictions so accuracy drops.',
+        )
+        parser.add_argument('--delay', type=float, default=0.0, help='Seconds to wait between messages (default 0).')
+
+    def handle(self, *args, **options):
+        count = options['count']
+        if count < 1:
+            raise CommandError('--count must be at least 1.')
+
+        predictor = self.get_predictor()
+        drift_start = count // 2 if options['drift'] else None
+
+        try:
+            connection, channel = open_channel()
+        except pika.exceptions.AMQPConnectionError as exc:
+            raise CommandError(
+                f'Could not connect to RabbitMQ at {settings.RABBITMQ_HOST!r}. Is it running (docker compose up -d)?'
+            ) from exc
+
+        correct = 0
+        try:
+            for i in range(count):
+                prediction, actual, latency_ms = predictor.predict()
+                if drift_start is not None and i >= drift_start and random.random() < DRIFT_FLIP_RATE:
+                    prediction = 1 - prediction
+                correct += prediction == actual
+
+                message = build_message(MODEL_NAME, predictor.version, prediction, actual, latency_ms)
+                channel.basic_publish(
+                    exchange='',
+                    routing_key=PREDICTIONS_QUEUE,
+                    body=json.dumps(message),
+                    properties=pika.BasicProperties(
+                        content_type='application/json',
+                        delivery_mode=pika.DeliveryMode.Persistent,
+                    ),
+                )
+                if i == drift_start:
+                    self.stdout.write(f'Drift started at message {i + 1}.')
+                if options['delay']:
+                    time.sleep(options['delay'])
+        finally:
+            connection.close()
+
+        self.stdout.write(self.style.SUCCESS(
+            f'Published {count} predictions to {PREDICTIONS_QUEUE!r} (accuracy {correct / count:.1%}).'
+        ))
+
+    def get_predictor(self):
+        if MODEL_PATH.exists() and DATA_PATH.exists():
+            self.stdout.write(f'Using {MODEL_PATH.name} on rows from {DATA_PATH.name}.')
+            return HeartDiseasePredictor(MODEL_PATH, DATA_PATH)
+        self.stdout.write(f'{MODEL_PATH.name} or {DATA_PATH.name} not found; publishing simulated predictions.')
+        return SimulatedPredictor()
