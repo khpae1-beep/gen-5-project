@@ -7,7 +7,9 @@ from monitoring.models import PredictionLog
 class Command(BaseCommand):
     help = (
         'Group each model\'s PredictionLog rows into windows of --window-size predictions and save '
-        'one MetricSnapshot per window, replacing that model\'s old snapshots.'
+        'one MetricSnapshot per window, replacing that model\'s old snapshots. Windows are flagged '
+        'as anomalies when accuracy falls more than 0.10 below MONITORING_BASELINE_ACCURACY or average '
+        'latency is more than double the median of the earlier windows.'
     )
 
     def add_arguments(self, parser):
@@ -30,7 +32,8 @@ class Command(BaseCommand):
 
         for model_name in model_names:
             snapshots, leftover = compute_snapshots(model_name, window_size)
+            anomalies = sum(s.is_anomaly for s in snapshots)
             self.stdout.write(self.style.SUCCESS(
-                f'{model_name}: saved {len(snapshots)} snapshots of {window_size} predictions '
-                f'({leftover} waiting for the next window).'
+                f'{model_name}: saved {len(snapshots)} snapshots of {window_size} predictions, '
+                f'{anomalies} anomalous ({leftover} waiting for the next window).'
             ))
