@@ -42,5 +42,5 @@ class Command(BaseCommand):
             ))
             if snapshots and not options['no_llm']:
                 _, used_llm = summarize_model(model_name)
-                source = 'LLM' if used_llm else 'rule-based (LLM unavailable)'
+                source = 'LLM' if used_llm else 'rule-based (LLM unavailable or failed the fact check)'
                 self.stdout.write(f'{model_name}: saved {source} summary on the latest snapshot.')

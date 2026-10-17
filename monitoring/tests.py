@@ -16,9 +16,9 @@ from monitoring.management.commands.consume_predictions import Command as Consum
 from monitoring.management.commands import publish_predictions
 from monitoring.management.commands.publish_predictions import build_message, find_data_path, promoted_version
 from monitoring.messages import InvalidMessage, handle_prediction_message
-from monitoring.metrics import compute_snapshots, flag_anomalies
+from monitoring.metrics import anomaly_reasons, compute_snapshots, flag_anomalies
 from monitoring.models import MetricSnapshot, PredictionLog
-from monitoring.summary import summarize_model
+from monitoring.summary import FactCheckError, build_prompt, fact_check, summarize_model, window_numbers
 
 T0 = datetime(2026, 10, 16, 12, 0, tzinfo=dt_timezone.utc)
 
@@ -452,13 +452,17 @@ class SummaryTests(TestCase):
     def latest(self):
         return MetricSnapshot.objects.order_by('window_start', 'id').last()
 
-    def test_saves_llm_reply_on_latest_snapshot(self):
-        llm = FakeLLM(reply='  Accuracy fell sharply in window 2.  ')
+    OPENING = 'Window 2 is the latest: accuracy 0.00, average latency 10.0 ms, flagged as an anomaly (accuracy 0.00 is 0.75 below the 0.75 baseline).'
+
+    def test_saves_opening_sentence_and_llm_reply_on_latest_snapshot(self):
+        llm = FakeLLM(reply='  Window 2 is an anomaly: accuracy fell from 1.00 to 0.00.  ')
 
         snapshot, used_llm = summarize_model('heart_disease', llm=llm)
 
         self.assertTrue(used_llm)
-        self.assertEqual(self.latest().summary, 'Accuracy fell sharply in window 2.')
+        self.assertEqual(
+            self.latest().summary, f'{self.OPENING} Window 2 is an anomaly: accuracy fell from 1.00 to 0.00.'
+        )
         self.assertEqual(snapshot.pk, self.latest().pk)
         self.assertIn('Window 2 (LATEST) (10 predictions): accuracy 0.00', llm.prompts[0])
         self.assertIn('Window 1 (10 predictions)', llm.prompts[0])
@@ -485,7 +489,7 @@ class SummaryTests(TestCase):
 
         self.assertFalse(used_llm)
         summary = self.latest().summary
-        self.assertTrue(summary.startswith('The LLM was unavailable (ConnectionError)'))
+        self.assertTrue(summary.startswith(f'{self.OPENING} The LLM was unavailable (ConnectionError)'))
         self.assertIn('20 predictions', summary)
         self.assertIn('window 2: accuracy 0.00 is 0.75 below the 0.75 baseline', summary)
 
@@ -498,7 +502,7 @@ class SummaryTests(TestCase):
         with mock.patch('monitoring.summary.get_llm', side_effect=ValueError('bad provider')):
             _, used_llm = summarize_model('heart_disease')
         self.assertFalse(used_llm)
-        self.assertTrue(self.latest().summary.startswith('The LLM was unavailable (ValueError)'))
+        self.assertTrue(self.latest().summary.startswith(f'{self.OPENING} The LLM was unavailable (ValueError)'))
 
     def test_rule_based_summary_without_anomalies(self):
         MetricSnapshot.objects.all().delete()
@@ -519,12 +523,133 @@ class SummaryTests(TestCase):
         self.assertEqual(summarize_model('unknown', llm=FakeLLM(reply='x')), (None, False))
 
     def test_compute_metrics_summarises_by_default(self):
-        llm = FakeLLM(reply='All good.')
+        llm = FakeLLM(reply='Window 2 is an anomaly.')
         with mock.patch('monitoring.summary.get_llm', return_value=llm) as get_llm:
             call_command('compute_metrics', stdout=mock.Mock())
         get_llm.assert_called_once_with(temperature=0)
         self.assertEqual(len(llm.prompts), 1)
-        self.assertEqual(self.latest().summary, 'All good.')
+        self.assertEqual(self.latest().summary, f'{self.OPENING} Window 2 is an anomaly.')
+
+    def test_falls_back_when_llm_summary_fails_fact_check(self):
+        replies = {
+            'calls an unflagged window an anomaly': (
+                'Windows 1 and 2 are anomalies.', 'it calls window 1 an anomaly, but it was not flagged',
+            ),
+            'misses a flagged window': ('The model is doing fine.', 'it does not mention flagged window 2'),
+            'wrong accuracy': (
+                'Window 2 is an anomaly with accuracy 0.55.', 'it mentions numbers that do not match the data: 0.55',
+            ),
+        }
+        for case, (reply, reason) in replies.items():
+            with self.subTest(case):
+                _, used_llm = summarize_model('heart_disease', llm=FakeLLM(reply=reply))
+
+                self.assertFalse(used_llm)
+                summary = self.latest().summary
+                self.assertTrue(summary.startswith(f'{self.OPENING} The LLM summary failed the fact check ({reason}'))
+                self.assertIn('so this is a rule-based summary.', summary)
+                self.assertIn('window 2: accuracy 0.00 is 0.75 below the 0.75 baseline', summary)
+                self.assertNotIn(reply, summary)
+
+    def test_opening_sentence_for_unflagged_latest_window(self):
+        log_predictions([(1, 1)] * 10, latency_ms=12.34)
+        compute_snapshots('heart_disease', window_size=10)
+
+        summarize_model('heart_disease', llm=FakeLLM(reply='Window 2 was an anomaly; window 3 recovered.'))
+
+        self.assertEqual(
+            self.latest().summary,
+            'Window 3 is the latest: accuracy 1.00, average latency 12.3 ms, not flagged as an anomaly. '
+            'Window 2 was an anomaly; window 3 recovered.',
+        )
+
+
+def summary_windows(*windows, baseline=0.75):
+    """(number, snapshot, reasons) for (accuracy, latency) pairs, as summarize_model builds them."""
+    snapshots = window_snapshots(*windows)
+    return [
+        (i + 1, s, anomaly_reasons(s, [e.avg_latency_ms for e in snapshots[:i]], baseline))
+        for i, s in enumerate(snapshots)
+    ]
+
+
+class FactCheckTests(TestCase):
+    def setUp(self):
+        # Window 3 is an accuracy anomaly, window 4 a latency anomaly (median of 10, 12, 11 is 11 ms).
+        self.windows = summary_windows((0.80, 10), (0.78, 12), (0.40, 11), (0.79, 30))
+        self.prompt = build_prompt('heart_disease', self.windows, 0.75)
+
+    def check(self, text):
+        fact_check(text, self.windows, self.prompt, 0.75)
+
+    def assertRejected(self, text, reason):
+        with self.assertRaisesMessage(FactCheckError, reason):
+            self.check(text)
+
+    def test_accepts_correct_summaries(self):
+        accepted = [
+            'Windows 3 and 4 are anomalies. Accuracy fell to 0.40 in window 3, 0.35 below the 0.75 baseline.',
+            'Window 3 is an anomaly (accuracy 40%), and window 4 was flagged for latency of 30.0 ms, 2.7 times '
+            'the 11.0 ms median.',
+            'Windows 3 to 4 were anomalous, but windows 1 and 2 were not.',
+            'Window 1 had accuracy 0.8 and was not an anomaly; window 3 was an anomaly, as was window 4.',
+            'Window 3 is an anomaly, while window 4 is also flagged as an anomaly.',
+        ]
+        for text in accepted:
+            with self.subTest(text):
+                self.check(text)
+
+    def test_rejects_unflagged_window_called_anomaly(self):
+        self.assertRejected('Windows 2, 3 and 4 are anomalies.', 'it calls window 2 an anomaly, but it was not flagged')
+        self.assertRejected('Windows 3 to 5 are anomalies.', 'it calls window 5 an anomaly')
+
+    def test_back_references_apply_to_windows_named_before(self):
+        self.check('Accuracy fell to 0.40 in window 3. This is an anomaly. Window 4 was slow; it is an anomaly too.')
+        # The bug that prompted the check: unflagged windows called anomalies through "These".
+        self.assertRejected(
+            'Window 1 has an accuracy of 0.80 and window 2 has 0.78. These are marked as ANOMALY. '
+            'Windows 3 and 4 are anomalies.',
+            'it calls windows 1 and 2 anomalies, but they were not flagged',
+        )
+
+    def test_allows_gap_from_baseline(self):
+        self.check('Windows 3 and 4 are anomalies; window 3 is 0.35 below the baseline and window 2 is 0.03 above it.')
+        self.assertRejected('Windows 3 and 4 are anomalies; window 3 is 0.30 below the baseline.', '0.30')
+
+    def test_rejects_flagged_window_called_normal(self):
+        self.assertRejected(
+            'Window 3 is an anomaly. Window 4 was not an anomaly.',
+            'it says flagged window 4 is not an anomaly',
+        )
+
+    def test_rejects_missing_flagged_window(self):
+        self.assertRejected('Window 3 is an anomaly.', 'it does not mention flagged window 4 as anomalous')
+        self.assertRejected('There are no anomalies.', 'it does not mention flagged windows 3 and 4 as anomalous')
+
+    def test_rejects_numbers_that_do_not_match(self):
+        prefix = 'Windows 3 and 4 are anomalies. '
+        cases = {
+            'Accuracy dropped to 0.45.': 'do not match the data: 0.45',
+            'Accuracy dropped to 45%.': 'do not match the data: 45%',
+            'Latency rose to 25 ms.': 'do not match the data: 25',
+            'Window 3 had accuracy 0.40 and latency 11.5 ms.': 'do not match the data: 11.5',
+        }
+        for text, reason in cases.items():
+            with self.subTest(text):
+                self.assertRejected(prefix + text, reason)
+
+    def test_no_anomalies(self):
+        windows = summary_windows((0.80, 10), (0.78, 12))
+        prompt = build_prompt('heart_disease', windows, 0.75)
+        fact_check('There are no anomalies; accuracy stayed near 0.78.', windows, prompt, 0.75)
+        with self.assertRaisesMessage(FactCheckError, 'it calls window 2 an anomaly'):
+            fact_check('Window 2 is an anomaly.', windows, prompt, 0.75)
+
+    def test_window_numbers(self):
+        self.assertEqual(window_numbers('windows 4 and 5, Window 7'), {4, 5, 7})
+        self.assertEqual(window_numbers('windows 2 to 4 and window 9'), {2, 3, 4, 9})
+        self.assertEqual(window_numbers('windows 3-5'), {3, 4, 5})
+        self.assertEqual(window_numbers('accuracy 0.40 over 10 predictions'), set())
 
 
 @mock.patch('monitoring.summary.get_llm', side_effect=AssertionError('The dashboard must not call the LLM.'))
