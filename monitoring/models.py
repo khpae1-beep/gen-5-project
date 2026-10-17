@@ -38,6 +38,9 @@ class MetricSnapshot(models.Model):
     avg_latency_ms = models.FloatField()
     count = models.PositiveIntegerField()
     is_anomaly = models.BooleanField(default=False)
+    # Which rule flagged the window; is_anomaly is set when either is.
+    accuracy_anomaly = models.BooleanField(default=False)
+    latency_anomaly = models.BooleanField(default=False)
     summary = models.TextField(blank=True)
 
     class Meta:
