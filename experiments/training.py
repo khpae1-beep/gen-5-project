@@ -56,17 +56,23 @@ def classification_metrics(prefix, actual, predicted):
     }
 
 
+def split_data(features, labels, test_size=0.2, random_state=42):
+    """The stratified train/test split; returns (X_train, X_test, y_train, y_test).
+
+    publish_predictions uses this too, to send only the rows a run was not trained on.
+    """
+    from sklearn.model_selection import train_test_split
+
+    return train_test_split(features, labels, test_size=test_size, random_state=random_state, stratify=labels)
+
+
 def train_and_evaluate(features, labels, *, test_size=0.2, random_state=42, **model_params):
     """Stratified split, fit, and score on both sides.
 
     Returns (fitted pipeline, metrics, train size, test size, duration in seconds).
     """
-    from sklearn.model_selection import train_test_split
-
     start = time.perf_counter()
-    X_train, X_test, y_train, y_test = train_test_split(
-        features, labels, test_size=test_size, random_state=random_state, stratify=labels,
-    )
+    X_train, X_test, y_train, y_test = split_data(features, labels, test_size, random_state)
     pipeline = build_pipeline(random_state=random_state, **model_params)
     pipeline.fit(X_train, y_train)
     metrics = {

@@ -10,6 +10,8 @@ from django.core.management import CommandError, call_command
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
+from experiments.tracking import log_run
+from experiments.training import load_data, split_data
 from monitoring.management.commands.consume_predictions import Command as ConsumeCommand
 from monitoring.management.commands import publish_predictions
 from monitoring.management.commands.publish_predictions import build_message, find_data_path, promoted_version
@@ -137,15 +139,16 @@ class PublisherFilesMixin:
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def make_model_and_data(self, name='heart.csv', rows=3):
-        """A trivial model that always predicts 1, and a CSV with the given number of rows."""
+    def make_model_and_data(self, name='heart.csv', rows=20, duplicates=0):
+        """A trivial model that always predicts 1, and a CSV of rows unique rows (two thirds labelled 1)
+        followed by copies of its first duplicates rows."""
         import joblib
         import pandas as pd
         from sklearn.dummy import DummyClassifier
 
-        data = pd.DataFrame({'age': range(50, 50 + rows), 'target': [0] + [1] * (rows - 1)})
+        data = pd.DataFrame({'age': range(50, 50 + rows), 'target': [int(i % 3 != 0) for i in range(rows)]})
         data_path = self.tmp / name
-        data.to_csv(data_path, index=False)
+        pd.concat([data, data.head(duplicates)]).to_csv(data_path, index=False)
         model_path = self.tmp / 'model.joblib'
         joblib.dump(DummyClassifier(strategy='most_frequent').fit(data[['age']], data['target']), model_path)
         return model_path, data_path
@@ -180,14 +183,14 @@ class PromotedVersionTests(PublisherFilesMixin, TestCase):
 class PublishDataOptionTests(PublisherFilesMixin, TestCase):
     def test_uses_given_csv_instead_of_default_locations(self):
         model_path, default_csv = self.make_model_and_data()
-        _, chosen_csv = self.make_model_and_data('chosen.csv', rows=7)
+        _, chosen_csv = self.make_model_and_data('chosen.csv', rows=30)
         command = publish_predictions.Command(stdout=io.StringIO())
 
         with mock.patch.object(publish_predictions, 'MODEL_PATH', model_path), \
                 mock.patch.object(publish_predictions, 'DATA_PATHS', [default_csv]):
-            predictor = command.get_predictor(str(chosen_csv))
+            predictor = command.get_predictor(str(chosen_csv), all_rows=True)
 
-        self.assertEqual(len(predictor.features), 7)
+        self.assertEqual(len(predictor.features), 30)
         self.assertIn(f'on rows from {chosen_csv}', command.stdout.getvalue())
 
     def test_errors_instead_of_simulating(self):
@@ -208,6 +211,77 @@ class PublishDataOptionTests(PublisherFilesMixin, TestCase):
         with mock.patch.object(publish_predictions, 'MODEL_PATH', self.tmp / 'no-model.joblib'), \
                 mock.patch.object(publish_predictions, 'DATA_PATHS', []):
             self.assertIsInstance(command.get_predictor(), publish_predictions.SimulatedPredictor)
+
+
+class HeldOutRowsTests(PublisherFilesMixin, TestCase):
+    def setUp(self):
+        super().setUp()
+        # 50 unique rows plus 5 duplicates, as in the real heart.csv.
+        self.model_path, self.data_path = self.make_model_and_data(rows=50, duplicates=5)
+        for name, value in (('MODEL_PATH', self.model_path), ('DATA_PATHS', [self.data_path])):
+            patcher = mock.patch.object(publish_predictions, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def get_predictor(self, **kwargs):
+        command = publish_predictions.Command(stdout=io.StringIO())
+        return command.get_predictor(**kwargs), command.stdout.getvalue()
+
+    def promote(self, test_size, random_state):
+        log_run('heart-disease-rf', {'test_size': 0.2, 'random_state': 42}, {})
+        log_run('heart-disease-rf', {'test_size': test_size, 'random_state': random_state}, {})
+        self.info.write_text(json.dumps({'experiment': 'heart-disease-rf', 'version': 2}))
+
+    def test_samples_the_promoted_runs_held_out_test_rows(self):
+        self.promote(test_size=0.3, random_state=7)
+
+        predictor, output = self.get_predictor()
+
+        # The same rows train_experiment held out for that run, and none it trained on.
+        features, labels = load_data(self.data_path)
+        X_train, X_test, _, y_test = split_data(features, labels, test_size=0.3, random_state=7)
+        self.assertEqual(list(predictor.features.index), list(X_test.index))
+        self.assertEqual(list(predictor.labels), list(y_test))
+        self.assertFalse(set(predictor.features.index) & set(X_train.index))
+        self.assertEqual(len(predictor.features), 15)
+        self.assertEqual(predictor.version, 'v2')
+        self.assertIn(
+            'Mode: held-out test rows, sampling 15 rows not used for training '
+            '(test_size 0.3, random_state 7 from heart-disease-rf v2)',
+            output,
+        )
+
+    def test_defaults_to_train_experiment_settings_without_a_promoted_run(self):
+        expected = split_data(*load_data(self.data_path), test_size=0.2, random_state=42)[1]
+        for info in (None, {'experiment': 'heart-disease-rf', 'version': 9}):
+            with self.subTest(info):
+                if info:
+                    self.info.write_text(json.dumps(info))
+                predictor, output = self.get_predictor()
+                self.assertEqual(list(predictor.features.index), list(expected.index))
+                self.assertIn('(test_size 0.2, random_state 42 from defaults)', output)
+
+    def test_all_rows_uses_every_row(self):
+        self.promote(test_size=0.3, random_state=7)
+
+        predictor, output = self.get_predictor(all_rows=True)
+
+        self.assertEqual(len(predictor.features), 55)  # Duplicates included, as before.
+        self.assertIn('Mode: all rows (--all-rows), sampling 55 rows', output)
+
+    def test_command_prints_mode(self):
+        for args, expected in (([], 'Mode: held-out test rows'), (['--all-rows'], 'Mode: all rows')):
+            with self.subTest(args), mock.patch.object(publish_predictions, 'open_channel') as open_channel:
+                open_channel.return_value = (mock.Mock(), mock.Mock())
+                out = io.StringIO()
+                call_command('publish_predictions', '--count', '3', *args, stdout=out)
+                self.assertIn(expected, out.getvalue())
+                self.assertEqual(open_channel.return_value[1].basic_publish.call_count, 3)
+
+    def test_too_small_to_split_suggests_all_rows(self):
+        _, tiny = self.make_model_and_data('tiny.csv', rows=3)
+        with self.assertRaisesMessage(CommandError, 'Use --all-rows'):
+            self.get_predictor(data=str(tiny))
 
 
 def log_predictions(results, model_name='heart_disease', latency_ms=10.0, timestamp=T0):
