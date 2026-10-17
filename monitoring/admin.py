@@ -12,6 +12,7 @@ class PredictionLogAdmin(admin.ModelAdmin):
 
 @admin.register(MetricSnapshot)
 class MetricSnapshotAdmin(admin.ModelAdmin):
-    list_display = ('model_name', 'window_start', 'window_end', 'accuracy', 'avg_latency_ms', 'count', 'is_anomaly')
-    list_filter = ('model_name', 'is_anomaly')
+    list_display = ('model_name', 'window_start', 'window_end', 'accuracy', 'avg_latency_ms', 'count', 'is_anomaly',
+                    'accuracy_anomaly', 'latency_anomaly')
+    list_filter = ('model_name', 'is_anomaly', 'accuracy_anomaly', 'latency_anomaly')
     date_hierarchy = 'window_end'

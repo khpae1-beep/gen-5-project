@@ -42,29 +42,42 @@ def window_stats(window):
     }
 
 
+def accuracy_reason(snapshot, baseline):
+    """Why the window's accuracy is anomalous, or None if it is not."""
+    if snapshot.accuracy is not None and baseline - snapshot.accuracy > MAX_ACCURACY_DROP + EPSILON:
+        return f'accuracy {snapshot.accuracy:.2f} is {baseline - snapshot.accuracy:.2f} below the {baseline:.2f} baseline'
+    return None
+
+
+def latency_reason(snapshot, earlier_latencies):
+    """Why the window's latency is anomalous compared with the earlier windows, or None if it is not."""
+    if not earlier_latencies:
+        return None
+    typical = median(earlier_latencies)
+    if snapshot.avg_latency_ms > MAX_LATENCY_RATIO * typical + EPSILON:
+        return (
+            f'average latency {snapshot.avg_latency_ms:.1f} ms is {snapshot.avg_latency_ms / typical:.1f} times '
+            f'the earlier median of {typical:.1f} ms'
+        )
+    return None
+
+
 def anomaly_reasons(snapshot, earlier_latencies, baseline):
     """Why a window is anomalous (empty if it is not), given the earlier windows' average latencies."""
-    reasons = []
-    if snapshot.accuracy is not None and baseline - snapshot.accuracy > MAX_ACCURACY_DROP + EPSILON:
-        reasons.append(
-            f'accuracy {snapshot.accuracy:.2f} is {baseline - snapshot.accuracy:.2f} below the {baseline:.2f} baseline'
-        )
-    if earlier_latencies:
-        typical = median(earlier_latencies)
-        if snapshot.avg_latency_ms > MAX_LATENCY_RATIO * typical + EPSILON:
-            reasons.append(
-                f'average latency {snapshot.avg_latency_ms:.1f} ms is {snapshot.avg_latency_ms / typical:.1f} times '
-                f'the earlier median of {typical:.1f} ms'
-            )
-    return reasons
+    reasons = [accuracy_reason(snapshot, baseline), latency_reason(snapshot, earlier_latencies)]
+    return [reason for reason in reasons if reason]
 
 
 def flag_anomalies(snapshots, baseline=None):
-    """Set is_anomaly, and a summary of the reasons, on each snapshot in window order."""
+    """Set the anomaly flags, and a summary of the reasons, on each snapshot in window order."""
     if baseline is None:
         baseline = baseline_accuracy()
     for i, snapshot in enumerate(snapshots):
-        reasons = anomaly_reasons(snapshot, [s.avg_latency_ms for s in snapshots[:i]], baseline)
+        accuracy = accuracy_reason(snapshot, baseline)
+        latency = latency_reason(snapshot, [s.avg_latency_ms for s in snapshots[:i]])
+        reasons = [reason for reason in (accuracy, latency) if reason]
+        snapshot.accuracy_anomaly = accuracy is not None
+        snapshot.latency_anomaly = latency is not None
         snapshot.is_anomaly = bool(reasons)
         snapshot.summary = f'Anomaly: {"; ".join(reasons)}.' if reasons else ''
     return snapshots

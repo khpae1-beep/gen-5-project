@@ -66,7 +66,7 @@
           <div class="chart-box"><canvas id="latency-chart" aria-label="Average latency per window, with anomalous windows in red" role="img"></canvas></div>
         </div>
       </section>
-      <p class="muted">Red points are anomalous windows.</p>
+      <p class="muted">Red points are windows flagged by that chart's rule: accuracy more than 0.10 below the baseline, or latency more than double the earlier median.</p>
 
       <h2>Latest summary</h2>
       {% if latest_snapshot.summary %}
@@ -109,11 +109,12 @@
     (function () {
       const data = JSON.parse(document.getElementById('chart-data').textContent);
       const RED = '#c81e1e';
-      const pointColors = (color) => data.anomaly.map((a) => (a ? RED : color));
-      const pointRadii = data.anomaly.map((a) => (a ? 6 : 3));
-      const tooltip = {
-        callbacks: { footer: (items) => (data.anomaly[items[0].dataIndex] ? 'Anomalous window' : '') },
-      };
+      // Each chart marks only the windows flagged by its own rule.
+      const pointColors = (flags, color) => flags.map((flagged) => (flagged ? RED : color));
+      const pointRadii = (flags) => flags.map((flagged) => (flagged ? 6 : 3));
+      const tooltip = (flags, text) => ({
+        callbacks: { footer: (items) => (flags[items[0].dataIndex] ? text : '') },
+      });
 
       new Chart(document.getElementById('accuracy-chart'), {
         type: 'line',
@@ -124,9 +125,9 @@
               label: 'Accuracy',
               data: data.accuracy,
               borderColor: '#3e7bfa',
-              pointBackgroundColor: pointColors('#3e7bfa'),
-              pointBorderColor: pointColors('#3e7bfa'),
-              pointRadius: pointRadii,
+              pointBackgroundColor: pointColors(data.accuracy_anomaly, '#3e7bfa'),
+              pointBorderColor: pointColors(data.accuracy_anomaly, '#3e7bfa'),
+              pointRadius: pointRadii(data.accuracy_anomaly),
               spanGaps: true,
               tension: 0.2,
             },
@@ -145,7 +146,7 @@
           maintainAspectRatio: false,
           interaction: { mode: 'index', intersect: false },
           scales: { y: { min: 0, max: 1, title: { display: true, text: 'Accuracy' } } },
-          plugins: { tooltip },
+          plugins: { tooltip: tooltip(data.accuracy_anomaly, 'Accuracy anomaly') },
         },
       });
 
@@ -158,9 +159,9 @@
               label: 'Average latency (ms)',
               data: data.latency,
               borderColor: '#2f9e8f',
-              pointBackgroundColor: pointColors('#2f9e8f'),
-              pointBorderColor: pointColors('#2f9e8f'),
-              pointRadius: pointRadii,
+              pointBackgroundColor: pointColors(data.latency_anomaly, '#2f9e8f'),
+              pointBorderColor: pointColors(data.latency_anomaly, '#2f9e8f'),
+              pointRadius: pointRadii(data.latency_anomaly),
               tension: 0.2,
             },
           ],
@@ -169,7 +170,7 @@
           maintainAspectRatio: false,
           interaction: { mode: 'index', intersect: false },
           scales: { y: { beginAtZero: true, title: { display: true, text: 'ms' } } },
-          plugins: { tooltip, legend: { display: false } },
+          plugins: { tooltip: tooltip(data.latency_anomaly, 'Latency anomaly'), legend: { display: false } },
         },
       });
     })();

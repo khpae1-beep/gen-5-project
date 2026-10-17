@@ -247,6 +247,18 @@ class AnomalyTests(TestCase):
         snapshots = flag_anomalies(window_snapshots((1, 10), (1, 100), (1, 30)), baseline=0.75)
         self.assertEqual([s.is_anomaly for s in snapshots], [False, True, False])
 
+    def test_records_which_rule_flagged_each_window(self):
+        snapshots = flag_anomalies(
+            window_snapshots((0.9, 10), (0.5, 10), (0.9, 40), (0.5, 40)), baseline=0.75
+        )
+
+        self.assertEqual(
+            [(s.is_anomaly, s.accuracy_anomaly, s.latency_anomaly) for s in snapshots],
+            [(False, False, False), (True, True, False), (True, False, True), (True, True, True)],
+        )
+        self.assertIn('accuracy 0.50', snapshots[3].summary)
+        self.assertIn('average latency 40.0 ms', snapshots[3].summary)
+
     def test_compute_snapshots_saves_flags(self):
         log_predictions([(1, 1)] * 10, latency_ms=10)
         log_predictions([(0, 1)] * 10, latency_ms=10)
@@ -254,8 +266,11 @@ class AnomalyTests(TestCase):
 
         compute_snapshots('heart_disease', window_size=10)
 
-        flags = list(MetricSnapshot.objects.order_by('window_start', 'id').values_list('is_anomaly', flat=True))
-        self.assertEqual(flags, [False, True, True])
+        flags = list(
+            MetricSnapshot.objects.order_by('window_start', 'id')
+            .values_list('is_anomaly', 'accuracy_anomaly', 'latency_anomaly')
+        )
+        self.assertEqual(flags, [(False, False, False), (True, True, False), (True, False, True)])
 
 
 class FakeLLM:
@@ -364,12 +379,23 @@ class DashboardTests(TestCase):
         self.assertEqual(context['anomaly_count'], 1)
         self.assertEqual(len(context['recent_predictions']), 20)
         self.assertEqual(context['chart_data']['accuracy'], [1.0, 0.0])
-        self.assertEqual(context['chart_data']['anomaly'], [False, True])
+        self.assertEqual(context['chart_data']['accuracy_anomaly'], [False, True])
+        self.assertEqual(context['chart_data']['latency_anomaly'], [False, False])
         self.assertEqual(context['chart_data']['baseline'], 0.75)
         self.assertContains(response, 'id="accuracy-chart"')
         self.assertContains(response, 'id="latency-chart"')
         self.assertContains(response, 'Saved summary.')
         get_llm.assert_not_called()
+
+    def test_charts_mark_only_their_own_rule(self, get_llm):
+        log_predictions([(1, 1)] * 10, latency_ms=10)
+        log_predictions([(1, 1)] * 10, latency_ms=50)  # Latency spike, accuracy fine.
+        compute_snapshots('heart_disease', window_size=10)
+
+        chart_data = self.client.get(self.url).context['chart_data']
+
+        self.assertEqual(chart_data['accuracy_anomaly'], [False, False])
+        self.assertEqual(chart_data['latency_anomaly'], [False, True])
 
     def test_model_can_be_chosen(self, get_llm):
         log_predictions([(1, 1)] * 3)
