@@ -1,0 +1,120 @@
+{% extends 'base.html' %}
+
+{% block title %}Tuning job {{ job.pk }} · AutoMLOps Suite{% endblock %}
+
+{% block content %}
+{% include 'experiments/_styles.html' %}
+<style>
+  .exp tr.best { background: #e3f9e5; }
+  .exp td.params { min-width: 200px; font-size: 0.85rem; }
+  .exp td.reason { min-width: 280px; font-size: 0.9rem; }
+  .exp .status-failed { color: #9b1c1c; }
+</style>
+<div class="exp">
+  <p class="crumbs"><a href="{% url 'tuning:list' %}">Tuning</a> /</p>
+  <h1>Tuning job {{ job.pk }}: {{ job.get_strategy_display }}</h1>
+  <p class="muted">
+    {{ trials|length }} trial{{ trials|length|pluralize }}{% if trials|length != job.n_trials %} (planned {{ job.n_trials }}){% endif %}
+    · {{ job.cv_folds }}-fold CV · seed {{ job.seed }} · {{ job.get_status_display }}
+    {% if time_taken is not None %} · took {{ time_taken|floatformat:0 }} s{% endif %}
+    · started {{ job.created_at|date:"Y-m-d H:i" }}
+    <br>Trials are logged as runs of <a href="{% url 'experiments:detail' job.experiment_name %}">{{ job.experiment_name }}</a>{% if job.data_path %}, trained on <code>{{ job.data_path }}</code>{% endif %}.
+  </p>
+  {% if job.error %}<p class="status-failed">Failed: {{ job.error }}</p>{% endif %}
+
+  {% if trials %}
+    {% if job.best_trial %}
+      <p>Best: <strong>trial {{ job.best_trial.number }}</strong>, CV accuracy {{ job.best_trial.cv_score|floatformat:4 }} ± {{ job.best_trial.cv_std|floatformat:4 }}
+        (test accuracy {{ job.best_trial.test_accuracy|floatformat:4 }}, reference only).</p>
+    {% endif %}
+
+    <div class="chart">
+      <h2 style="margin: 0 0 8px; font-size: 1rem;">CV accuracy per trial</h2>
+      <div class="chart-box"><canvas id="cv-chart" role="img" aria-label="CV accuracy of each trial with the best score so far"></canvas></div>
+    </div>
+
+    <h2>Trials</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th class="num">Trial</th><th>Proposed by</th><th>Params</th><th class="num">CV accuracy</th><th class="num">Test accuracy<br><span class="muted">(reference only)</span></th><th>Reason</th></tr>
+        </thead>
+        <tbody>
+          {% for row in trials %}
+            <tr{% if row.best %} class="best"{% endif %} id="trial-{{ row.trial.number }}">
+              <td class="num" style="white-space: nowrap;">
+                {{ row.trial.number }}{% if row.best %} <span class="badge">best</span>{% endif %}
+                {% if row.trial.run %}<br><a href="{% url 'experiments:run' row.trial.run.experiment.name row.trial.run.version %}" title="Open this trial's run to see its metrics or promote it">run v{{ row.trial.run.version }}</a>{% endif %}
+              </td>
+              <td style="white-space: nowrap;">{{ row.trial.get_proposed_by_display }}</td>
+              <td class="params"><code>{{ row.params }}</code></td>
+              <td class="num">{{ row.trial.cv_score|floatformat:4 }} ± {{ row.trial.cv_std|floatformat:4 }}</td>
+              <td class="num">{{ row.trial.test_accuracy|floatformat:4|default:"–" }}</td>
+              <td class="reason">{{ row.trial.reasoning }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="muted">Open a trial's run (under its number) to see all its metrics and promote it.</p>
+  {% else %}
+    <p class="empty">This job has no trials yet.</p>
+  {% endif %}
+</div>
+
+{% if trials %}
+  {{ chart_data|json_script:"chart-data" }}
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+  <script>
+    (function () {
+      const data = JSON.parse(document.getElementById('chart-data').textContent);
+      new Chart(document.getElementById('cv-chart'), {
+        type: 'line',
+        data: {
+          labels: data.labels,
+          datasets: [
+            {
+              label: 'CV accuracy',
+              data: data.cv,
+              showLine: false,
+              borderColor: '#3e7bfa',
+              backgroundColor: '#3e7bfa',
+              pointRadius: data.best.map((b) => (b ? 7 : 4)),
+              pointBackgroundColor: data.best.map((b) => (b ? '#18794e' : '#3e7bfa')),
+              pointBorderColor: data.best.map((b) => (b ? '#18794e' : '#3e7bfa')),
+            },
+            {
+              label: 'Best so far',
+              data: data.best_so_far,
+              borderColor: '#18794e',
+              backgroundColor: '#18794e',
+              stepped: true,
+              pointRadius: 0,
+              pointHitRadius: 0,
+            },
+          ],
+        },
+        options: {
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          scales: {
+            x: { title: { display: true, text: 'Trial' } },
+            y: { title: { display: true, text: 'CV accuracy' } },
+          },
+          plugins: {
+            tooltip: {
+              callbacks: {
+                title: (items) => 'Trial ' + items[0].label,
+                footer: (items) => {
+                  const i = items[0].dataIndex;
+                  return '± ' + data.std[i].toFixed(4) + ' std · ' + data.proposed_by[i] + (data.best[i] ? ' · best' : '');
+                },
+              },
+            },
+          },
+        },
+      });
+    })();
+  </script>
+{% endif %}
+{% endblock %}

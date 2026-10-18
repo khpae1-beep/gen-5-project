@@ -17,7 +17,7 @@
         <tbody>
           {% for job in jobs %}
             <tr>
-              <td>{{ job.pk }}</td>
+              <td><a href="{% url 'tuning:detail' job.pk %}">Job {{ job.pk }}</a></td>
               <td>{{ job.get_strategy_display }}</td>
               <td class="num">{{ job.trial_count }}{% if job.trial_count != job.n_trials %} <span class="muted">of {{ job.n_trials }}</span>{% endif %}</td>
               <td class="num">{% if job.best_trial %}{{ job.best_trial.cv_score|floatformat:4 }} ± {{ job.best_trial.cv_std|floatformat:4 }}{% else %}–{% endif %}</td>
