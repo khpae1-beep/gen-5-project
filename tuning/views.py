@@ -1,7 +1,10 @@
+from django.contrib.admin.views.decorators import staff_member_required
 from django.db.models import Count
 from django.shortcuts import get_object_or_404, render
+from django.views.decorators.http import require_POST
 
 from .models import Trial, TuningJob
+from .suggestions import suggest_next
 
 
 def job_list(request):
@@ -94,3 +97,13 @@ def compare(request):
             },
         })
     return render(request, 'tuning/compare.html', context)
+
+
+@require_POST
+@staff_member_required
+def suggest(request, pk):
+    """The job page plus the LLM's suggested next configurations. Only this POST calls the LLM."""
+    job = get_object_or_404(TuningJob.objects.select_related('best_trial'), pk=pk)
+    context = job_context(job)
+    context['suggestions'] = suggest_next(job, [row['trial'] for row in context['trials']])
+    return render(request, 'tuning/job_detail.html', context)

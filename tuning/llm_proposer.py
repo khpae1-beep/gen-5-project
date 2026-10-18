@@ -79,7 +79,13 @@ def parse_reply(reply, space):
         raise InvalidProposal(f'the LLM reply was not valid JSON ({exc.msg})') from exc
     if not isinstance(data, dict):
         raise InvalidProposal('the LLM reply was not a JSON object')
+    return proposal_from_dict(data, space)
 
+
+def proposal_from_dict(data, space):
+    """(params, reason) from one {"params": {...}, "reason": "..."} object; raises InvalidProposal or InvalidParams."""
+    if not isinstance(data, dict):
+        raise InvalidProposal('it is not a JSON object')
     if isinstance(data.get('params'), dict):
         params = data['params']
     elif set(data) - {'reason'} == set(space):  # The params at the top level, next to "reason".

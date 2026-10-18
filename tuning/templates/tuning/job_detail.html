@@ -57,6 +57,31 @@
       </table>
     </div>
     <p class="muted">Open a trial's run (under its number) to see all its metrics and promote it.</p>
+
+    <h2 id="suggestions">Next experiments</h2>
+    {% if user.is_active and user.is_staff %}
+      <form method="post" action="{% url 'tuning:suggest' job.pk %}#suggestions">
+        {% csrf_token %}
+        <button type="submit">Suggest next experiments</button>
+        <span class="muted">Asks the LLM for 3 new configurations based on all trials, and checks its reasons against the best trial.</span>
+      </form>
+    {% else %}
+      <p>
+        <button type="button" disabled>Suggest next experiments</button>
+        <span class="muted">Only staff can ask for suggestions. <a href="{% url 'admin:login' %}?next={{ request.path|urlencode }}">Log in as a staff user at /admin/</a>.</span>
+      </p>
+    {% endif %}
+
+    {% if suggestions %}
+      {% if suggestions.error %}<p class="empty">{{ suggestions.error }}</p>{% endif %}
+      {% for suggestion in suggestions.suggestions %}
+        <div class="explanation" style="margin-top: 12px;">
+          <p style="margin-top: 0;"><strong>Suggestion {{ forloop.counter }}</strong>: <code>{% for name, value in suggestion.params.items %}{{ name }}={{ value|default_if_none:"None" }}{% if not forloop.last %}, {% endif %}{% endfor %}</code></p>
+          <p style="margin-bottom: 0;">{{ suggestion.reasoning }}</p>
+        </div>
+      {% endfor %}
+      {% for note in suggestions.rejected %}<p class="muted">{{ note }}</p>{% endfor %}
+    {% endif %}
   {% else %}
     <p class="empty">This job has no trials yet.</p>
   {% endif %}
