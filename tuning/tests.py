@@ -301,6 +301,26 @@ class RandomBaselineTests(TuningTestCase):
         self.assertEqual(len({params_key(p) for p, _ in first}), 3)
 
 
+class FallbackStreamTests(TuningTestCase):
+    def test_llm_fallbacks_do_not_repeat_the_random_baseline(self):
+        split = make_split(*training.load_data(self.data))
+
+        def unavailable(_):
+            raise ConnectionError('Ollama is not running')
+
+        def params(strategy):
+            job = run_job(self.make_job(strategy, n_trials=3, seed=42), split, self.data, llm=RunnableLambda(unavailable))
+            return [t.params for t in job.trials.all()], {t.proposed_by for t in job.trials.all()}
+
+        baseline, baseline_proposers = params('random')
+        fallbacks, fallback_proposers = params('llm')
+        again, _ = params('llm')
+
+        self.assertEqual((baseline_proposers, fallback_proposers), ({'random'}, {'random-fallback'}))
+        self.assertFalse({params_key(p) for p in baseline} & {params_key(p) for p in fallbacks})
+        self.assertEqual(fallbacks, again)  # Still reproducible with the same seed.
+
+
 class RunTuningCommandTests(TuningTestCase):
     def run_tuning(self, *args):
         out = io.StringIO()

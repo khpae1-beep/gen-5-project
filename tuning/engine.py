@@ -17,6 +17,12 @@ from .search_space import params_key, sample_unique_params
 RANDOM_REASON = 'Random search: sampled uniformly from the search space.'
 
 
+def fallback_rng(seed):
+    """The random stream for an LLM job's fallbacks: derived from the job seed but separate from
+    the random baseline's stream, so fallback trials don't repeat the baseline's sequence."""
+    return random.Random(f'{seed}:llm-fallback')  # str seeds are hashed with SHA-512, so stable.
+
+
 def experiment_name_for(strategy):
     return f'heart-disease-rf-tuning-{strategy}'
 
@@ -35,7 +41,7 @@ def run_job(job, split, data_path=None, *, test_size=0.2, llm=None, on_trial=Non
     accuracy is only recorded. on_trial(trial) is called after each trial. If anything fails,
     the job is marked failed with the error and the exception is re-raised.
     """
-    rng = random.Random(job.seed)
+    rng = random.Random(job.seed) if job.strategy == TuningJob.STRATEGY_RANDOM else fallback_rng(job.seed)
     history = []
     try:
         for number in range(1, job.n_trials + 1):
