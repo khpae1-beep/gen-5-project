@@ -190,6 +190,10 @@ This copies that run's model to `models/heart_disease_model.joblib`, the file `p
 
 `publish_predictions` loads the model when it starts, so run it again after promoting. Each prediction it publishes then has the promoted version as its `model_version` (for example `v2`), shown in the Version column of the recent predictions table at http://127.0.0.1:8000/monitoring/ and on `PredictionLog` rows in the admin. It samples that run's held-out test rows, so monitored accuracy is comparable with the run's test accuracy. See [Monitoring](#monitoring) for the options.
 
+### Web pages
+
+With `python manage.py runserver` running, http://127.0.0.1:8000/experiments/ lists each experiment with its number of runs, best test accuracy and promoted version. An experiment's page shows its run history: each version's changed settings, train and test accuracy and version note, plus a chart of train vs test accuracy per version (a large gap means overfitting). A run's page shows all its parameters, metrics, changes from the previous version, checkpoint, data hash and git commit. Its "Promote this version" button does the same as `promote_run`, but only for staff users: log in at http://127.0.0.1:8000/admin/ (create an account with `python manage.py createsuperuser`). The compare page puts two versions side by side, highlighting differences with +/- changes. Its "Explain the difference" button asks the LLM for a short explanation, checked against the real numbers, with a written-from-the-numbers fallback. Page loads never call the LLM.
+
 ## Hyperparameter tuning
 
 The `tuning` app searches for better random forest settings. Each trial proposes a set of hyperparameters, scores them, and is logged as a run of an experiment, so it can be compared and promoted like any other run.
