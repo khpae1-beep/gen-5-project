@@ -9,4 +9,5 @@ urlpatterns = [
     path('compare/', views.compare, name='compare'),
     path('<int:pk>/', views.job_detail, name='detail'),
     path('<int:pk>/suggest/', views.suggest, name='suggest'),
+    path('<int:pk>/try/', views.try_suggestion, name='try'),
 ]

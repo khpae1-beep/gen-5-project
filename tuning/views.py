@@ -1,10 +1,17 @@
+import json
+
+from django.contrib import messages
 from django.contrib.admin.views.decorators import staff_member_required
 from django.db.models import Count
-from django.shortcuts import get_object_or_404, render
+from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.views.decorators.http import require_POST
 
+from .engine import TrialError, add_trial
+from .llm_proposer import Proposal
 from .models import Trial, TuningJob
-from .suggestions import suggest_next
+from .search_space import InvalidParams, validate_params
+from .suggestions import recheck_reason, suggest_next
 
 
 def job_list(request):
@@ -107,3 +114,31 @@ def suggest(request, pk):
     context = job_context(job)
     context['suggestions'] = suggest_next(job, [row['trial'] for row in context['trials']])
     return render(request, 'tuning/job_detail.html', context)
+
+
+@require_POST
+@staff_member_required
+def try_suggestion(request, pk):
+    """Run one trial with a suggestion's params and add it to the job."""
+    job = get_object_or_404(TuningJob, pk=pk)
+    try:
+        params = validate_params(json.loads(request.POST.get('params', '')), job.search_space)
+    except (ValueError, InvalidParams) as exc:  # json.JSONDecodeError is a ValueError.
+        messages.error(request, f'Could not try that suggestion: invalid params ({exc}).')
+        return redirect('tuning:detail', pk=job.pk)
+
+    trials = list(job.trials.order_by('number'))
+    if not trials:
+        messages.error(request, 'Could not try that suggestion: the job has no trials.')
+        return redirect('tuning:detail', pk=job.pk)
+    reasoning, status = recheck_reason(job, trials, params, request.POST.get('reason', '').strip())
+    try:
+        trial, new_best = add_trial(job, Proposal(params, reasoning, Trial.PROPOSED_BY_SUGGESTION, status))
+    except TrialError as exc:
+        messages.error(request, f'Could not try that suggestion: {exc}')
+        return redirect('tuning:detail', pk=job.pk)
+
+    job.refresh_from_db()
+    outcome = 'the new best trial.' if new_best else f'the best is still trial {job.best_trial.number}.'
+    messages.success(request, f'Trial {trial.number}: CV accuracy {trial.cv_score:.4f} ± {trial.cv_std:.4f}; {outcome}')
+    return redirect(reverse('tuning:detail', args=[job.pk]) + f'#trial-{trial.number}')

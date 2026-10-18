@@ -46,6 +46,11 @@ class Suggestion:
     params: dict
     reasoning: str
     reason_check: str  # A Trial.REASON_* value.
+    llm_reason: str = ''  # The LLM's own reason, re-checked when the suggestion is tried.
+
+    @property
+    def params_json(self):
+        return json.dumps(self.params)
 
 
 @dataclass
@@ -67,14 +72,7 @@ def suggest_next(job, trials, llm=None):
     if not trials:
         return SuggestionResult(error='The job has no trials to learn from yet.')
     best = best_trial_of(trials)
-    history = [{'number': t.number, 'params': t.params, 'cv_score': t.cv_score, 'cv_std': t.cv_std} for t in trials]
-    inputs = {
-        'space': describe_space(job.search_space),
-        'history': describe_history(history),
-        'cv_folds': job.cv_folds,
-        'n': N_SUGGESTIONS,
-        'best': best.number,
-    }
+    inputs = prompt_inputs(job, trials, best)
     try:
         reply = (SUGGEST_PROMPT | (llm or get_llm(temperature=0)) | StrOutputParser()).invoke(inputs)
     except Exception as exc:  # Any provider failure (e.g. Ollama not running).
@@ -104,10 +102,27 @@ def suggest_next(job, trials, llm=None):
             continue
         suggested.add(key)
         reasoning, status = check_against_best(reason, params, best, inputs)
-        result.suggestions.append(Suggestion(params, reasoning, status))
+        result.suggestions.append(Suggestion(params, reasoning, status, reason))
     if not result.suggestions and not result.rejected:
         result.error = 'The LLM did not suggest any configurations.'
     return result
+
+
+def prompt_inputs(job, trials, best):
+    history = [{'number': t.number, 'params': t.params, 'cv_score': t.cv_score, 'cv_std': t.cv_std} for t in trials]
+    return {
+        'space': describe_space(job.search_space),
+        'history': describe_history(history),
+        'cv_folds': job.cv_folds,
+        'n': N_SUGGESTIONS,
+        'best': best.number,
+    }
+
+
+def recheck_reason(job, trials, params, llm_reason):
+    """Check a suggestion's original reason again against the job's current best trial."""
+    best = best_trial_of(trials)
+    return check_against_best(llm_reason, params, best, prompt_inputs(job, trials, best))
 
 
 def check_against_best(reason, params, best, inputs):
