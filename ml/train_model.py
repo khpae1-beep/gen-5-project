@@ -14,9 +14,11 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.pipeline import Pipeline
 
 # Load dataset
-data_path = Path(__file__).resolve().parent.parent / "data" / "heart.csv"
+from pathlib import Path
 
-df = pd.read_csv(data_path)
+DATA_PATH = Path(__file__).resolve().parent / "data" / "heart.csv"
+
+df = pd.read_csv(DATA_PATH)
 
 # Remove duplicate records
 df = df.drop_duplicates()

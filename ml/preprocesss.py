@@ -11,9 +11,11 @@ from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
 
 # Step 1: Load the Heart Disease Dataset
-data_path = Path(__file__).resolve().parent.parent / "data" / "heart.csv"
+from pathlib import Path
 
-df = pd.read_csv(data_path)
+DATA_PATH = Path(__file__).resolve().parent / "data" / "heart.csv"
+
+df = pd.read_csv(DATA_PATH)
 
 print("AUTOMLOPS SUITE - HEART DISEASE DATA PREPROCESSING")
 print("------------------------------------------------")
