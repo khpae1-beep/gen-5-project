@@ -47,3 +47,50 @@ def job_context(job):
 def job_detail(request, pk):
     job = get_object_or_404(TuningJob.objects.select_related('best_trial'), pk=pk)
     return render(request, 'tuning/job_detail.html', job_context(job))
+
+
+def pick_job(jobs, value):
+    """The job with id value from jobs (newest first), or the newest."""
+    try:
+        return next(job for job in jobs if job.pk == int(value))
+    except (TypeError, ValueError, StopIteration):
+        return jobs[0] if jobs else None
+
+
+def job_summary(job, trials):
+    best = max(trials, key=lambda t: (t.cv_score, -t.number)) if trials else None
+    llm_reasons = [t for t in trials if t.proposed_by in (Trial.PROPOSED_BY_LLM, Trial.PROPOSED_BY_SUGGESTION)]
+    return {
+        'job': job,
+        'trial_count': len(trials),
+        'best': best,
+        'time_taken': time_taken(job),
+        'fallbacks': sum(t.proposed_by == Trial.PROPOSED_BY_FALLBACK for t in trials),
+        'llm_reasons': len(llm_reasons),
+        'reasons_passed': sum(t.reason_check == Trial.REASON_PASSED for t in llm_reasons),
+        'reasons_not_recorded': sum(t.reason_check == '' for t in llm_reasons),
+    }
+
+
+def compare(request):
+    jobs = list(TuningJob.objects.order_by('-created_at', '-id'))
+    llm_jobs = [job for job in jobs if job.strategy == TuningJob.STRATEGY_LLM]
+    random_jobs = [job for job in jobs if job.strategy == TuningJob.STRATEGY_RANDOM]
+    llm_job, random_job = pick_job(llm_jobs, request.GET.get('llm')), pick_job(random_jobs, request.GET.get('random'))
+    context = {'llm_jobs': llm_jobs, 'random_jobs': random_jobs, 'llm_job': llm_job, 'random_job': random_job}
+    if llm_job and random_job:
+        trials = {llm_job.pk: [], random_job.pk: []}
+        for trial in Trial.objects.filter(job__in=[llm_job, random_job]).order_by('number'):
+            trials[trial.job_id].append(trial)
+        llm_trials, random_trials = trials[llm_job.pk], trials[random_job.pk]
+        context.update({
+            'summaries': [job_summary(llm_job, llm_trials), job_summary(random_job, random_trials)],
+            'chart_data': {
+                'labels': list(range(1, max(len(llm_trials), len(random_trials)) + 1)),
+                'llm': best_so_far(llm_trials),
+                'random': best_so_far(random_trials),
+                'llm_label': f'LLM job {llm_job.pk}',
+                'random_label': f'Random job {random_job.pk}',
+            },
+        })
+    return render(request, 'tuning/compare.html', context)

@@ -6,6 +6,7 @@
 {% include 'experiments/_styles.html' %}
 <div class="exp">
   <h1>Hyperparameter tuning</h1>
+  <p><a href="{% url 'tuning:compare' %}">Compare an LLM job with a random job</a></p>
   <p class="muted">Each job tries settings for the heart disease random forest and scores them by cross-validation (CV) accuracy on the training rows. Test accuracy is for reference only and is never used to choose settings.</p>
 
   {% if jobs %}
