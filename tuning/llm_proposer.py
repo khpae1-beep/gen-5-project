@@ -48,6 +48,7 @@ class Proposal:
     params: dict
     reasoning: str
     proposed_by: str
+    reason_check: str = ''  # A Trial.REASON_* value for LLM reasons.
 
 
 class InvalidProposal(ValueError):
@@ -101,19 +102,21 @@ def llm_proposal(space, history, llm, cv_folds):
     earlier = {params_key(t['params']): t['number'] for t in history}
     if params_key(params) in earlier:
         raise InvalidProposal(f'the LLM repeated the params of trial {earlier[params_key(params)]}')
-    return params, checked_reason(reason, params, history[-1]['params'] if history else None, inputs)
+    return (params, *checked_reason(reason, params, history[-1]['params'] if history else None, inputs))
 
 
-def checked_reason(reason, params, previous, inputs):
-    """The LLM's reason if it matches the change from the previous trial, else a code-written one."""
-    description = describe_change(params, previous)
+def checked_reason(reason, params, previous, inputs, against='the previous trial'):
+    """(reasoning, Trial.REASON_* status): the LLM's reason if it matches the change from previous,
+    else a code-written description of the change."""
+    description = describe_change(params, previous, against)
     if not reason:
-        return f'{description} (The LLM gave no reason.)'
+        return f'{description} (The LLM gave no reason.)', Trial.REASON_MISSING
+    shown = '\n'.join(str(value) for value in inputs.values())
     try:
-        check_reason(reason, params, previous, f'{inputs["space"]}\n{inputs["history"]}\n{inputs["cv_folds"]}')
+        check_reason(reason, params, previous, shown)
     except ReasonCheckError as exc:
-        return f"{description} The LLM's reason failed the fact check ({exc})."
-    return reason
+        return f"{description} The LLM's reason failed the fact check ({exc}).", Trial.REASON_FAILED
+    return reason, Trial.REASON_PASSED
 
 
 def propose_next(space, history, rng, llm=None, cv_folds=5):
@@ -123,8 +126,8 @@ def propose_next(space, history, rng, llm=None, cv_folds=5):
     the fallback, so a run that never falls back gives the same proposals for the same replies.
     """
     try:
-        params, reason = llm_proposal(space, history, llm or get_llm(temperature=0), cv_folds)
-        return Proposal(params, reason, Trial.PROPOSED_BY_LLM)
+        params, reason, status = llm_proposal(space, history, llm or get_llm(temperature=0), cv_folds)
+        return Proposal(params, reason, Trial.PROPOSED_BY_LLM, status)
     except InvalidParams as exc:
         why = f"the LLM's params are invalid ({exc})"
     except InvalidProposal as exc:

@@ -156,7 +156,7 @@ class ProposerTests(TestCase):
     def test_keeps_a_correct_reason(self):
         reason = 'Raise n_estimators to 400 and remove the depth limit, since trial 2 scored 0.8610.'
         proposal = self.propose(FakeListChatModel(responses=[reply(self.NEW, reason)]))
-        self.assertEqual(proposal.reasoning, reason)
+        self.assertEqual((proposal.reasoning, proposal.reason_check), (reason, Trial.REASON_PASSED))
 
     def test_accepts_params_at_top_level_and_missing_reason(self):
         proposal = self.propose(FakeListChatModel(responses=[json.dumps(self.NEW)]))
@@ -335,8 +335,11 @@ class RunTuningCommandTests(TuningTestCase):
         self.assertEqual(job.status, TuningJob.STATUS_COMPLETED)
         self.assertEqual((job.strategy, job.n_trials, job.cv_folds, job.seed), ('random', 3, 3, 42))
         self.assertEqual(job.search_space, SPACE)
+        self.assertEqual((job.data_path, job.test_size), (str(self.data.resolve()), 0.2))
+        self.assertGreaterEqual(job.finished_at, job.created_at)
         self.assertEqual([t.number for t in trials], [1, 2, 3])
         self.assertTrue(all(t.proposed_by == Trial.PROPOSED_BY_RANDOM for t in trials))
+        self.assertTrue(all(t.reason_check == '' for t in trials))
 
         # The best trial is chosen by CV accuracy only (the earliest wins ties), never test accuracy.
         best = max(trials, key=lambda t: (t.cv_score, -t.number))
@@ -378,6 +381,12 @@ class RunTuningCommandTests(TuningTestCase):
         )
         self.assertEqual(trials[0].params, VALID)
         self.assertEqual(trials[3].params, {**VALID, 'max_features': None})
+        # Trial 1 claims "more trees" with no previous trial to compare with.
+        self.assertEqual(trials[0].reason_check, Trial.REASON_FAILED)
+        self.assertIn("The LLM's reason failed the fact check (it says n_estimators should increase, but there is no previous trial)", trials[0].reasoning)
+        self.assertEqual([t.reason_check for t in trials[1:3]], ['', ''])
+        self.assertIn(trials[3].reason_check, (Trial.REASON_PASSED, Trial.REASON_FAILED))
+        self.assertIsNotNone(job.finished_at)
         self.assertIn('n_estimators=9999 is outside 50–500', trials[1].reasoning)
         self.assertIn('repeated the params of trial 1', trials[2].reasoning)
         self.assertEqual(len({params_key(t.params) for t in trials}), 4)
@@ -402,5 +411,6 @@ class RunTuningCommandTests(TuningTestCase):
             call_command('run_tuning', '--strategy', 'random', '--data', str(self.data), '--cv', '200', stdout=io.StringIO())
         job = TuningJob.objects.get()
         self.assertEqual(job.status, TuningJob.STATUS_FAILED)
+        self.assertIsNotNone(job.finished_at)
         self.assertIn('ValueError', job.error)
         self.assertFalse(job.trials.exists())

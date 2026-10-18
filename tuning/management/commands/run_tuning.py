@@ -55,6 +55,8 @@ class Command(BaseCommand):
             search_space=HEART_DISEASE_RF_SPACE,
             seed=options['seed'],
             experiment_name=experiment_name_for(options['strategy']),
+            data_path=project_relative(data_path),
+            test_size=TEST_SIZE,
         )
         self.stdout.write(
             f'Tuning job {job.pk}: {job.get_strategy_display()}, {job.n_trials} trials, {job.cv_folds}-fold CV, '

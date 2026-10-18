@@ -24,7 +24,12 @@ class TuningJob(models.Model):
     best_cv_score = models.FloatField(null=True, blank=True)
     best_trial = models.ForeignKey('Trial', on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
     error = models.TextField(blank=True)
+    # The data and split the trials were scored on, so more trials can be added later.
+    data_path = models.CharField(max_length=500, blank=True)
+    test_size = models.FloatField(default=0.2)
     created_at = models.DateTimeField(auto_now_add=True)
+    # Blank for jobs that are still running or were run before this was recorded.
+    finished_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ['-created_at']
@@ -40,9 +45,19 @@ class Trial(models.Model):
     PROPOSED_BY_RANDOM = 'random'
     # The LLM's proposal was invalid or the LLM was unavailable, so a random one was used.
     PROPOSED_BY_FALLBACK = 'random-fallback'
+    # Added from the job page's "Suggest next experiments".
+    PROPOSED_BY_SUGGESTION = 'llm-suggestion'
     PROPOSERS = [
         (PROPOSED_BY_LLM, 'LLM'), (PROPOSED_BY_RANDOM, 'Random'), (PROPOSED_BY_FALLBACK, 'Random (LLM fallback)'),
+        (PROPOSED_BY_SUGGESTION, 'LLM suggestion'),
     ]
+
+    # Whether the LLM's reason passed reason_check; blank when there is no LLM reason or it was
+    # not recorded (trials from before it was).
+    REASON_PASSED = 'passed'
+    REASON_FAILED = 'failed'
+    REASON_MISSING = 'missing'
+    REASON_CHECKS = [(REASON_PASSED, 'Passed'), (REASON_FAILED, 'Failed'), (REASON_MISSING, 'No reason given')]
 
     job = models.ForeignKey(TuningJob, on_delete=models.CASCADE, related_name='trials')
     number = models.PositiveIntegerField()
@@ -54,6 +69,7 @@ class Trial(models.Model):
     test_accuracy = models.FloatField(null=True, blank=True)
     reasoning = models.TextField(blank=True)
     proposed_by = models.CharField(max_length=20, choices=PROPOSERS)
+    reason_check = models.CharField(max_length=10, choices=REASON_CHECKS, blank=True)
     run = models.ForeignKey(
         'experiments.Run', on_delete=models.SET_NULL, null=True, blank=True, related_name='tuning_trials',
     )

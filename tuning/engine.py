@@ -3,6 +3,7 @@ import random
 
 import joblib
 from django.db import transaction
+from django.utils import timezone
 from django.utils.text import slugify
 
 from experiments import training
@@ -59,10 +60,11 @@ def run_job(job, split, data_path=None, *, test_size=0.2, llm=None, on_trial=Non
                 on_trial(trial)
     except Exception as exc:
         job.status, job.error = TuningJob.STATUS_FAILED, f'{type(exc).__name__}: {exc}'
-        job.save(update_fields=['status', 'error'])
+        job.finished_at = timezone.now()
+        job.save(update_fields=['status', 'error', 'finished_at'])
         raise
-    job.status = TuningJob.STATUS_COMPLETED
-    job.save(update_fields=['status'])
+    job.status, job.finished_at = TuningJob.STATUS_COMPLETED, timezone.now()
+    job.save(update_fields=['status', 'finished_at'])
     return job
 
 
@@ -98,5 +100,6 @@ def log_trial(job, number, proposal, score, data_path, test_size):
             test_accuracy=score.test_accuracy,
             reasoning=proposal.reasoning,
             proposed_by=proposal.proposed_by,
+            reason_check=proposal.reason_check,
             run=run,
         )
