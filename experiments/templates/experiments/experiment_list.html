@@ -17,7 +17,7 @@
         <tbody>
           {% for experiment in experiments %}
             <tr>
-              <td><strong>{{ experiment.name }}</strong>{% if experiment.description %}<div class="muted">{{ experiment.description }}</div>{% endif %}</td>
+              <td><a href="{% url 'experiments:detail' experiment.name %}">{{ experiment.name }}</a>{% if experiment.description %}<div class="muted">{{ experiment.description }}</div>{% endif %}</td>
               <td class="num">{{ experiment.run_count }}</td>
               <td class="num">
                 {% if experiment.best_test_accuracy is not None %}

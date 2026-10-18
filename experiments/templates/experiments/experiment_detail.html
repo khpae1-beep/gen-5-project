@@ -1,0 +1,92 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ experiment.name }} · Experiments · AutoMLOps Suite{% endblock %}
+
+{% block content %}
+{% include 'experiments/_styles.html' %}
+<div class="exp">
+  <p class="crumbs"><a href="{% url 'experiments:list' %}">Experiments</a> /</p>
+  <h1>{{ experiment.name }}</h1>
+  <p class="muted">
+    {{ rows|length }} run{{ rows|length|pluralize }}{% if promoted_version %} · <span class="badge">v{{ promoted_version }} promoted</span>{% endif %}
+    {% if experiment.description %}<br>{{ experiment.description }}{% endif %}
+  </p>
+
+  {% if rows %}
+    <div class="chart">
+      <h2 style="margin: 0 0 8px; font-size: 1rem;">Train vs test accuracy per version</h2>
+      <div class="chart-box"><canvas id="accuracy-chart" role="img" aria-label="Train and test accuracy for each version"></canvas></div>
+      <p class="muted" style="margin-bottom: 0;">A large gap between train and test accuracy means the model fits its training data much better than new data (overfitting).</p>
+    </div>
+
+    <h2>Run history</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Version</th><th>Date</th>
+            {% for name in param_names %}<th>{{ name }}</th>{% endfor %}
+            <th class="num">Train acc.</th><th class="num">Test acc.</th><th class="num">Gap</th><th class="num">Test F1</th><th>Version note</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+            <tr>
+              <td style="white-space: nowrap;">v{{ row.run.version }}{% if row.promoted %} <span class="badge">promoted</span>{% endif %}</td>
+              <td style="white-space: nowrap;">{{ row.run.created_at|date:"Y-m-d H:i" }}</td>
+              {% for value in row.params %}<td>{{ value }}</td>{% endfor %}
+              <td class="num">{{ row.train_accuracy|floatformat:3|default:"–" }}</td>
+              <td class="num">{{ row.test_accuracy|floatformat:3|default:"–" }}</td>
+              <td class="num">{{ row.gap|floatformat:3|default:"–" }}</td>
+              <td class="num">{{ row.test_f1|floatformat:3|default:"–" }}</td>
+              <td class="note">{{ row.run.version_note|default:"–" }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if param_names %}<p class="muted">Parameters shown are the ones that differ between runs.</p>{% endif %}
+  {% else %}
+    <p class="empty">No runs yet. Train one with <code>python manage.py train_experiment --experiment {{ experiment.name }}</code>.</p>
+  {% endif %}
+</div>
+
+{% if rows %}
+  {{ chart_data|json_script:"chart-data" }}
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+  <script>
+    (function () {
+      const data = JSON.parse(document.getElementById('chart-data').textContent);
+      const radius = data.promoted.map((p) => (p ? 7 : 3));
+      new Chart(document.getElementById('accuracy-chart'), {
+        type: 'line',
+        data: {
+          labels: data.labels,
+          datasets: [
+            { label: 'Train accuracy', data: data.train, borderColor: '#7b8794', backgroundColor: '#7b8794', borderDash: [6, 4], pointRadius: radius, spanGaps: true },
+            { label: 'Test accuracy', data: data.test, borderColor: '#3e7bfa', backgroundColor: '#3e7bfa', pointRadius: radius, spanGaps: true },
+          ],
+        },
+        options: {
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          scales: { y: { suggestedMin: 0.5, suggestedMax: 1, title: { display: true, text: 'Accuracy' } } },
+          plugins: {
+            tooltip: {
+              callbacks: {
+                footer: (items) => {
+                  const i = items[0].dataIndex;
+                  const parts = [];
+                  if (data.train[i] != null && data.test[i] != null) parts.push('Gap: ' + (data.train[i] - data.test[i]).toFixed(3));
+                  if (data.promoted[i]) parts.push('Promoted');
+                  return parts.join('\n');
+                },
+              },
+            },
+          },
+        },
+      });
+    })();
+  </script>
+{% endif %}
+{% endblock %}
