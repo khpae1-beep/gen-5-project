@@ -1,0 +1,37 @@
+{% extends 'base.html' %}
+
+{% block title %}Tuning · AutoMLOps Suite{% endblock %}
+
+{% block content %}
+{% include 'experiments/_styles.html' %}
+<div class="exp">
+  <h1>Hyperparameter tuning</h1>
+  <p class="muted">Each job tries settings for the heart disease random forest and scores them by cross-validation (CV) accuracy on the training rows. Test accuracy is for reference only and is never used to choose settings.</p>
+
+  {% if jobs %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Job</th><th>Strategy</th><th class="num">Trials</th><th class="num">Best CV accuracy</th><th class="num">Found at trial</th><th class="num">Test accuracy of best<br><span class="muted">(reference only)</span></th><th>Status</th><th>Date</th></tr>
+        </thead>
+        <tbody>
+          {% for job in jobs %}
+            <tr>
+              <td>{{ job.pk }}</td>
+              <td>{{ job.get_strategy_display }}</td>
+              <td class="num">{{ job.trial_count }}{% if job.trial_count != job.n_trials %} <span class="muted">of {{ job.n_trials }}</span>{% endif %}</td>
+              <td class="num">{% if job.best_trial %}{{ job.best_trial.cv_score|floatformat:4 }} ± {{ job.best_trial.cv_std|floatformat:4 }}{% else %}–{% endif %}</td>
+              <td class="num">{{ job.best_trial.number|default:"–" }}</td>
+              <td class="num">{{ job.best_trial.test_accuracy|floatformat:4|default:"–" }}</td>
+              <td>{{ job.get_status_display }}</td>
+              <td style="white-space: nowrap;">{{ job.created_at|date:"Y-m-d H:i" }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="empty">No tuning jobs yet. Run one with <code>python manage.py run_tuning --strategy llm</code>.</p>
+  {% endif %}
+</div>
+{% endblock %}
