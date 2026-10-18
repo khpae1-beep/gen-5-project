@@ -1,11 +1,17 @@
 from django.db.models import Count, FloatField, Max, OuterRef, Subquery
 from django.db.models.fields.json import KT
 from django.db.models.functions import Cast
-from django.shortcuts import get_object_or_404, render
+import re
+
+from django.contrib import messages
+from django.shortcuts import get_object_or_404, redirect, render
+from django.views.decorators.http import require_POST
 
 from .models import Experiment, Run
-from .promotion import current_promotion
-from .versioning import format_value
+from .promotion import PromotionError, checkpoint_problem, current_promotion, promote
+from .versioning import format_value, metric_label
+
+SPLIT_METRIC = re.compile(r'^(train|test)_(.+)$')
 
 
 def test_accuracy_desc(runs):
@@ -76,3 +82,76 @@ def experiment_detail(request, name):
             'promoted': [row['promoted'] for row in rows],
         },
     })
+
+
+def is_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def change_rows(changes, label=str):
+    """Rows for a {name: {'old', 'new'}} dict, with a numeric delta where both sides are numbers."""
+    rows = []
+    for name, change in changes.items():
+        old, new = change['old'], change['new']
+        delta = new - old if is_number(old) and is_number(new) else None
+        rows.append({'name': label(name), 'old': format_value(old), 'new': format_value(new), 'delta': delta})
+    return rows
+
+
+def metric_table(metrics):
+    """Train/test metrics as rows of (name, train, test, gap); other metrics separately."""
+    by_name, other = {}, []
+    for name, value in metrics.items():
+        match = SPLIT_METRIC.match(name)
+        if match:
+            by_name.setdefault(match.group(2), {})[match.group(1)] = value
+        else:
+            other.append({'name': metric_label(name), 'value': value})
+    rows = []
+    for name, values in by_name.items():
+        train, test = values.get('train'), values.get('test')
+        gap = train - test if is_number(train) and is_number(test) else None
+        rows.append({'name': metric_label(name), 'train': train, 'test': test, 'gap': gap})
+    return rows, other
+
+
+def get_run(name, version):
+    return get_object_or_404(
+        Run.objects.select_related('experiment', 'parent'), experiment__name=name, version=version,
+    )
+
+
+def run_detail(request, name, version):
+    run = get_run(name, version)
+    changed_params = run.changes.get('params', {})
+    metric_rows, other_metrics = metric_table(run.metrics)
+    promoted = promoted_version_of(run.experiment) == run.version
+    return render(request, 'experiments/run_detail.html', {
+        'run': run,
+        'params': [
+            {'name': name, 'value': format_value(value), 'changed': name in changed_params}
+            for name, value in run.params.items()
+        ],
+        'metric_rows': metric_rows,
+        'other_metrics': other_metrics,
+        'param_changes': change_rows(changed_params),
+        'metric_changes': change_rows(run.changes.get('metrics', {}), label=metric_label),
+        'promoted': promoted,
+        'checkpoint_problem': checkpoint_problem(run),
+    })
+
+
+@require_POST
+def promote_run(request, name, version):
+    """Same as `python manage.py promote_run <name> <version>`."""
+    run = get_run(name, version)
+    try:
+        promote(run)
+    except PromotionError as exc:
+        messages.error(request, f'Could not promote {run}: {exc}')
+    else:
+        messages.success(
+            request,
+            f'Promoted {run}. Restart publish_predictions to publish predictions from this version.',
+        )
+    return redirect('experiments:run', name=run.experiment.name, version=run.version)

@@ -21,10 +21,10 @@
               <td class="num">{{ experiment.run_count }}</td>
               <td class="num">
                 {% if experiment.best_test_accuracy is not None %}
-                  {{ experiment.best_test_accuracy|floatformat:3 }} (v{{ experiment.best_version }})
+                  {{ experiment.best_test_accuracy|floatformat:3 }} <a href="{% url 'experiments:run' experiment.name experiment.best_version %}">v{{ experiment.best_version }}</a>
                 {% else %}–{% endif %}
               </td>
-              <td>{% if experiment.promoted_version %}<span class="badge">v{{ experiment.promoted_version }} promoted</span>{% else %}–{% endif %}</td>
+              <td>{% if experiment.promoted_version %}<a class="badge" href="{% url 'experiments:run' experiment.name experiment.promoted_version %}">v{{ experiment.promoted_version }} promoted</a>{% else %}–{% endif %}</td>
               <td>{{ experiment.last_run_at|date:"Y-m-d H:i"|default:"–" }}</td>
             </tr>
           {% endfor %}

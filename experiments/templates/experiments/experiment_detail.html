@@ -8,7 +8,7 @@
   <p class="crumbs"><a href="{% url 'experiments:list' %}">Experiments</a> /</p>
   <h1>{{ experiment.name }}</h1>
   <p class="muted">
-    {{ rows|length }} run{{ rows|length|pluralize }}{% if promoted_version %} · <span class="badge">v{{ promoted_version }} promoted</span>{% endif %}
+    {{ rows|length }} run{{ rows|length|pluralize }}{% if promoted_version %} · <a class="badge" href="{% url 'experiments:run' experiment.name promoted_version %}">v{{ promoted_version }} promoted</a>{% endif %}
     {% if experiment.description %}<br>{{ experiment.description }}{% endif %}
   </p>
 
@@ -32,7 +32,7 @@
         <tbody>
           {% for row in rows %}
             <tr>
-              <td style="white-space: nowrap;">v{{ row.run.version }}{% if row.promoted %} <span class="badge">promoted</span>{% endif %}</td>
+              <td style="white-space: nowrap;"><a href="{% url 'experiments:run' experiment.name row.run.version %}">v{{ row.run.version }}</a>{% if row.promoted %} <span class="badge">promoted</span>{% endif %}</td>
               <td style="white-space: nowrap;">{{ row.run.created_at|date:"Y-m-d H:i" }}</td>
               {% for value in row.params %}<td>{{ value }}</td>{% endfor %}
               <td class="num">{{ row.train_accuracy|floatformat:3|default:"–" }}</td>
