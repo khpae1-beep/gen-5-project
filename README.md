@@ -248,6 +248,10 @@ python manage.py promote_run heart-disease-rf-tuning-llm 2
 
 Staff users can also use the "Promote this version" button on the trial's run page. As with any promoted run, restart `publish_predictions` to serve it. It then samples the same held-out test rows the trial was scored against.
 
+### Tuning pages
+
+http://127.0.0.1:8000/tuning/ lists the tuning jobs with their strategy, number of trials, best CV accuracy ± std, the trial where it was found, that trial's test accuracy (reference only), status and date. A job's page charts the CV accuracy of each trial with a "best so far" line, and lists the trials with their proposer, settings, scores and reason, best trial highlighted; each trial links to its run on the experiments pages, where it can be promoted. The compare page (http://127.0.0.1:8000/tuning/compare/) charts the best CV accuracy so far for an LLM job against a random job, defaulting to the latest of each, with a summary of best score, trial found, time taken, random fallbacks and how many LLM reasons passed the fact check. On a job's page, staff users (log in at `/admin/`) can press "Suggest next experiments" to ask the LLM for 3 new configurations, each checked to be inside the search space and untried, with its reason fact-checked against the best trial. The suggestions are saved on the job, so reloading the page doesn't ask again. "Try this" on a suggestion runs one trial with those settings on the job's data and adds it to the job. Page loads never call the LLM.
+
 ## Tests
 
 ```bash

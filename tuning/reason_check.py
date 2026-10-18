@@ -133,8 +133,8 @@ def verb(claim):
     return {'up': 'increase', 'down': 'decrease', 'same': 'stay the same'}[claim]
 
 
-def describe_change(params, previous):
-    """A code-written description of the proposal compared with the previous trial."""
+def describe_change(params, previous, against='the previous trial'):
+    """A code-written description of the proposal compared with previous (described as against)."""
     if previous is None:
         return 'First trial: ' + ', '.join(f'{name} {format_value(value)}' for name, value in params.items()) + '.'
     changed = [f'{name} {format_value(previous.get(name))}→{format_value(value)}'
@@ -146,4 +146,4 @@ def describe_change(params, previous):
     if kept:
         parts.append('kept ' + ', '.join(kept))
     text = '; '.join(parts)
-    return text[0].upper() + text[1:] + ' compared with the previous trial.'
+    return text[0].upper() + text[1:] + f' compared with {against}.'
