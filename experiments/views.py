@@ -8,7 +8,7 @@ from django.contrib.admin.views.decorators import staff_member_required
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
-from .comparison import compare_runs, explain_difference
+from .comparison import compare_runs, explain_difference, test_metric_higher_is_better
 from .models import Experiment, Run
 from .promotion import PromotionError, checkpoint_problem, current_promotion, promote
 from .versioning import format_value, metric_label
@@ -90,13 +90,23 @@ def is_number(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def change_rows(changes, label=str):
-    """Rows for a {name: {'old', 'new'}} dict, with a numeric delta where both sides are numbers."""
+def change_rows(changes, label=str, metrics=False):
+    """Rows for a {name: {'old', 'new'}} dict, with a numeric delta where both sides are numbers.
+
+    For metrics, direction is 'up' or 'down' (green or red) for test metrics, as on the compare
+    page, and 'neutral' (grey) for train and other metrics, whose better direction is not known.
+    """
     rows = []
     for name, change in changes.items():
         old, new = change['old'], change['new']
         delta = new - old if is_number(old) and is_number(new) else None
-        rows.append({'name': label(name), 'old': format_value(old), 'new': format_value(new), 'delta': delta})
+        direction = ''
+        if metrics and delta:
+            direction = ('up' if delta > 0 else 'down') if test_metric_higher_is_better(name) else 'neutral'
+        rows.append({
+            'name': label(name), 'old': format_value(old), 'new': format_value(new),
+            'delta': delta, 'direction': direction,
+        })
     return rows
 
 
@@ -137,7 +147,7 @@ def run_detail(request, name, version):
         'metric_rows': metric_rows,
         'other_metrics': other_metrics,
         'param_changes': change_rows(changed_params),
-        'metric_changes': change_rows(run.changes.get('metrics', {}), label=metric_label),
+        'metric_changes': change_rows(run.changes.get('metrics', {}), label=metric_label, metrics=True),
         'promoted': promoted,
         'checkpoint_problem': checkpoint_problem(run),
     })

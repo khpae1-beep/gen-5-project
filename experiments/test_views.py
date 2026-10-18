@@ -148,7 +148,11 @@ class RunDetailTests(ExperimentPagesTestCase):
             [(c['name'], c['old'], c['new'], c['delta']) for c in context['param_changes']],
             [('n_estimators', '300', '200', -100), ('max_depth', '8', '5', -3)],
         )
-        self.assertEqual([c['name'] for c in context['metric_changes']], ['train accuracy', 'train f1'])
+        self.assertEqual(
+            [(c['name'], c['direction']) for c in context['metric_changes']],
+            [('train accuracy', 'neutral'), ('train f1', 'neutral')],
+        )
+        self.assertEqual([c['direction'] for c in context['param_changes']], ['', ''])
         run = self.runs[2]
         for text in (run.checkpoint_path, run.data_hash or '–', 'abc123def456', '1.5 s', 'v3: note 3',
                      'Compare v2 and v3 side by side'):
@@ -172,6 +176,28 @@ class RunDetailTests(ExperimentPagesTestCase):
         response = self.client.get(self.url(3))
         self.assertContains(response, '<button type="submit">Promote this version</button>', html=True)
         self.assertNotContains(response, 'Only staff can promote')
+
+    def test_only_test_metric_changes_are_green_or_red(self, get_llm):
+        # v2 raised test metrics; v4 lowers test and train accuracy and adds a new metric, which has
+        # no numeric change to colour.
+        log_run('heart-disease-rf', RUNS[2][0], {**RUNS[2][1], 'train_accuracy': 0.9, 'test_accuracy': 0.75, 'log_loss': 0.4})
+        cases = {
+            2: {'test accuracy': 'up', 'test f1': 'up'},
+            4: {'train accuracy': 'neutral', 'test accuracy': 'down', 'log loss': ''},
+        }
+        for version, expected in cases.items():
+            with self.subTest(version=version):
+                response = self.client.get(self.url(version))
+                changes = {c['name']: c['direction'] for c in response.context['metric_changes']}
+                self.assertEqual(changes, expected)
+                for direction in filter(None, expected.values()):
+                    self.assertContains(response, f'class="num {direction}"')
+
+    def test_metrics_without_a_known_better_direction_are_neutral(self, get_llm):
+        from experiments.views import change_rows
+
+        rows = change_rows({'log_loss': {'old': 0.5, 'new': 0.4}, 'test_recall': {'old': 0.8, 'new': 0.8}}, metrics=True)
+        self.assertEqual([row['direction'] for row in rows], ['neutral', ''])
 
     def test_first_run_has_nothing_to_compare(self, get_llm):
         response = self.client.get(self.url(1))

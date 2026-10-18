@@ -79,7 +79,7 @@
           {% endfor %}
           {% for change in metric_changes %}
             <tr><td class="muted">metric</td><td>{{ change.name }}</td><td class="num">{{ change.old }}</td><td class="num">{{ change.new }}</td>
-              <td class="num {% if change.delta > 0 %}up{% elif change.delta < 0 %}down{% endif %}">{% if change.delta is not None %}{% if change.delta > 0 %}+{% endif %}{{ change.delta|floatformat:3 }}{% else %}–{% endif %}</td></tr>
+              <td class="num {{ change.direction }}">{% if change.delta is not None %}{% if change.delta > 0 %}+{% endif %}{{ change.delta|floatformat:3 }}{% else %}–{% endif %}</td></tr>
           {% endfor %}
         </tbody>
       </table>
