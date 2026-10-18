@@ -190,6 +190,60 @@ This copies that run's model to `models/heart_disease_model.joblib`, the file `p
 
 `publish_predictions` loads the model when it starts, so run it again after promoting. Each prediction it publishes then has the promoted version as its `model_version` (for example `v2`), shown in the Version column of the recent predictions table at http://127.0.0.1:8000/monitoring/ and on `PredictionLog` rows in the admin. It samples that run's held-out test rows, so monitored accuracy is comparable with the run's test accuracy. See [Monitoring](#monitoring) for the options.
 
+## Hyperparameter tuning
+
+The `tuning` app searches for better random forest settings. Each trial proposes a set of hyperparameters, scores them, and is logged as a run of an experiment, so it can be compared and promoted like any other run.
+
+```bash
+python manage.py run_tuning --strategy llm
+python manage.py run_tuning --strategy random
+```
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `--strategy` | `llm` | `llm`: the LLM from `LLM_PROVIDER` proposes each trial from the earlier trials' scores. `random`: random search, the baseline to compare against. |
+| `--trials` | `15` | Number of trials. |
+| `--cv` | `5` | Cross-validation folds. |
+| `--seed` | `42` | Seed for the train/test split, the folds, the forest and random proposals. The same seed gives the same random search. |
+| `--data` | first of `ml/data/heart.csv`, `data/heart.csv`, `heart.csv` | CSV with a `target` column. |
+
+The search space is `n_estimators` 50–500, `max_depth` 2–20 or none, `min_samples_split` 2–20, `min_samples_leaf` 1–10 and `max_features` `sqrt`, `log2` or none.
+
+### How trials are scored
+
+The data is split the same way as in `train_experiment` (drop duplicates, stratified 80/20 split). Each trial is scored by k-fold cross-validation accuracy on the **training rows only**, and the best trial is the one with the highest CV accuracy. Test accuracy is printed for reference but never used to choose settings, so it stays an honest estimate for new data.
+
+### LLM proposals
+
+With `--strategy llm`, the LLM sees the search space and every earlier trial's settings and CV score (never test accuracy). It replies with the next settings and a one-sentence reason.
+
+- If the settings are outside the search space, repeat an earlier trial, or the LLM is unavailable, a random proposal is used instead. The reason then starts with "Random fallback:" and says why.
+- If only the reason is wrong about what changed (for example "increase min_samples_split" when it went from 10 to 5), the LLM's settings are kept, but the reason is replaced by a code-written description of the change that notes the failed check.
+
+Each trial prints its settings, CV accuracy and reason:
+
+```
+Trial 2/15 [llm] {"n_estimators": 200, "max_depth": 15, "min_samples_split": 5, "min_samples_leaf": 2, "max_features": "log2"}
+  CV accuracy 0.8504 ± 0.0640 (best so far); test accuracy 0.7705 (reference only)
+  Changed n_estimators 300→200, max_depth None→15, ... The LLM's reason failed the fact check (...).
+```
+
+At the end it prints the best trial, the trial number where it was found, and the command to promote it.
+
+### Trials on the experiments pages
+
+Trials are logged under the experiment `heart-disease-rf-tuning-llm` or `heart-disease-rf-tuning-random`, one version per trial (later jobs continue the numbering). At http://127.0.0.1:8000/experiments/ each trial shows its settings, train and test accuracy and, as its version note, the tuning job, trial number, CV accuracy and reason. Use the compare page to see two trials side by side. Tuning jobs and their trials are also listed in the Django admin under Tuning.
+
+### Promote the best trial
+
+`run_tuning` ends with the command for its best trial, for example:
+
+```bash
+python manage.py promote_run heart-disease-rf-tuning-llm 2
+```
+
+Staff users can also use the "Promote this version" button on the trial's run page. As with any promoted run, restart `publish_predictions` to serve it. It then samples the same held-out test rows the trial was scored against.
+
 ## Tests
 
 ```bash
