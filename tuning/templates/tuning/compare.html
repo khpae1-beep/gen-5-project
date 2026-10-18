@@ -1,0 +1,75 @@
+{% extends 'base.html' %}
+
+{% block title %}Compare tuning jobs · AutoMLOps Suite{% endblock %}
+
+{% block content %}
+{% include 'experiments/_styles.html' %}
+<div class="exp">
+  <p class="crumbs"><a href="{% url 'tuning:list' %}">Tuning</a> /</p>
+  <h1>LLM vs random search</h1>
+
+  {% if not llm_job or not random_job %}
+    <p class="empty">Comparing needs at least one LLM job and one random job. Run <code>python manage.py run_tuning --strategy llm</code> and <code>python manage.py run_tuning --strategy random</code>.</p>
+  {% else %}
+    <form method="get" class="muted">
+      <label for="llm">LLM job</label>
+      <select id="llm" name="llm">{% for job in llm_jobs %}<option value="{{ job.pk }}"{% if job.pk == llm_job.pk %} selected{% endif %}>Job {{ job.pk }} ({{ job.n_trials }} trials, {{ job.created_at|date:"Y-m-d H:i" }})</option>{% endfor %}</select>
+      <label for="random">random job</label>
+      <select id="random" name="random">{% for job in random_jobs %}<option value="{{ job.pk }}"{% if job.pk == random_job.pk %} selected{% endif %}>Job {{ job.pk }} ({{ job.n_trials }} trials, {{ job.created_at|date:"Y-m-d H:i" }})</option>{% endfor %}</select>
+      <button type="submit" class="secondary">Compare</button>
+    </form>
+
+    <div class="chart" style="margin-top: 16px;">
+      <h2 style="margin: 0 0 8px; font-size: 1rem;">Best CV accuracy so far, per trial</h2>
+      <div class="chart-box"><canvas id="compare-chart" role="img" aria-label="Best CV accuracy so far for the LLM job and the random job"></canvas></div>
+    </div>
+
+    <h2>Summary</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th></th>{% for s in summaries %}<th class="num"><a href="{% url 'tuning:detail' s.job.pk %}">{{ s.job.get_strategy_display }}, job {{ s.job.pk }}</a></th>{% endfor %}</tr></thead>
+        <tbody>
+          <tr><th>Trials</th>{% for s in summaries %}<td class="num">{{ s.trial_count }}</td>{% endfor %}</tr>
+          <tr><th>Best CV accuracy</th>{% for s in summaries %}<td class="num">{% if s.best %}{{ s.best.cv_score|floatformat:4 }} ± {{ s.best.cv_std|floatformat:4 }}{% else %}–{% endif %}</td>{% endfor %}</tr>
+          <tr><th>Found at trial</th>{% for s in summaries %}<td class="num">{{ s.best.number|default:"–" }}</td>{% endfor %}</tr>
+          <tr><th>Test accuracy of best <span class="muted">(reference only)</span></th>{% for s in summaries %}<td class="num">{{ s.best.test_accuracy|floatformat:4|default:"–" }}</td>{% endfor %}</tr>
+          <tr><th>Time taken</th>{% for s in summaries %}<td class="num">{% if s.time_taken is not None %}{{ s.time_taken|floatformat:0 }} s{% else %}<span class="muted">not recorded</span>{% endif %}</td>{% endfor %}</tr>
+          <tr><th>Random fallbacks</th>{% for s in summaries %}<td class="num">{% if s.job.strategy == 'llm' %}{{ s.fallbacks }}{% else %}–{% endif %}</td>{% endfor %}</tr>
+          <tr><th>LLM reasons that passed the fact check</th>{% for s in summaries %}<td class="num">
+            {% if s.llm_reasons %}{{ s.reasons_passed }} of {{ s.llm_reasons }}{% if s.reasons_not_recorded %} <span class="muted">({{ s.reasons_not_recorded }} not recorded)</span>{% endif %}{% else %}–{% endif %}
+          </td>{% endfor %}</tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted">Both jobs choose their best trial by CV accuracy on the training rows; test accuracy is shown for reference only.</p>
+  {% endif %}
+</div>
+
+{% if summaries %}
+  {{ chart_data|json_script:"chart-data" }}
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+  <script>
+    (function () {
+      const data = JSON.parse(document.getElementById('chart-data').textContent);
+      new Chart(document.getElementById('compare-chart'), {
+        type: 'line',
+        data: {
+          labels: data.labels,
+          datasets: [
+            { label: data.llm_label, data: data.llm, borderColor: '#3e7bfa', backgroundColor: '#3e7bfa', stepped: true, pointRadius: 3 },
+            { label: data.random_label, data: data.random, borderColor: '#7b8794', backgroundColor: '#7b8794', borderDash: [6, 4], stepped: true, pointRadius: 3 },
+          ],
+        },
+        options: {
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          scales: {
+            x: { title: { display: true, text: 'Trial' } },
+            y: { title: { display: true, text: 'Best CV accuracy so far' } },
+          },
+        },
+      });
+    })();
+  </script>
+{% endif %}
+{% endblock %}

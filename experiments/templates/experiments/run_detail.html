@@ -1,0 +1,104 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ run.experiment.name }} v{{ run.version }} · Experiments · AutoMLOps Suite{% endblock %}
+
+{% block content %}
+{% include 'experiments/_styles.html' %}
+<div class="exp">
+  <p class="crumbs"><a href="{% url 'experiments:list' %}">Experiments</a> / <a href="{% url 'experiments:detail' run.experiment.name %}">{{ run.experiment.name }}</a> /</p>
+  <h1>v{{ run.version }}{% if promoted %} <span class="badge">promoted</span>{% endif %}</h1>
+  <p>{{ run.version_note|default:"No version note." }}</p>
+
+  {% if user.is_active and user.is_staff %}
+    <form method="post" action="{% url 'experiments:promote' run.experiment.name run.version %}"
+          onsubmit="return confirm('Promote {{ run.experiment.name|escapejs }} v{{ run.version }}? It replaces the model publish_predictions serves.');">
+      {% csrf_token %}
+      <button type="submit"{% if promoted or checkpoint_problem %} disabled{% endif %}>Promote this version</button>
+      {% if promoted %}<span class="muted">This version is the promoted model.</span>
+      {% elif checkpoint_problem %}<span class="muted">{{ checkpoint_problem }}</span>{% endif %}
+    </form>
+  {% else %}
+    <p>
+      <button type="button" disabled>Promote this version</button>
+      {% if promoted %}<span class="muted">This version is the promoted model.</span>
+      {% else %}<span class="muted">Only staff can promote. <a href="{% url 'admin:login' %}?next={{ request.path|urlencode }}">Log in as a staff user at /admin/</a> to promote.</span>{% endif %}
+    </p>
+  {% endif %}
+
+  <h2>Metrics</h2>
+  {% if metric_rows or other_metrics %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Metric</th><th class="num">Train</th><th class="num">Test</th><th class="num">Gap</th></tr></thead>
+        <tbody>
+          {% for row in metric_rows %}
+            <tr>
+              <td>{{ row.name }}</td>
+              <td class="num">{{ row.train|floatformat:3|default:"–" }}</td>
+              <td class="num">{{ row.test|floatformat:3|default:"–" }}</td>
+              <td class="num">{{ row.gap|floatformat:3|default:"–" }}</td>
+            </tr>
+          {% endfor %}
+          {% for metric in other_metrics %}
+            <tr><td>{{ metric.name }}</td><td class="num" colspan="3">{{ metric.value }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="muted">No metrics recorded.</p>
+  {% endif %}
+
+  <h2>Parameters</h2>
+  {% if params %}
+    <div class="table-wrap">
+      <table>
+        <tbody>
+          {% for param in params %}
+            <tr{% if param.changed %} class="changed"{% endif %}><td><code>{{ param.name }}</code></td><td>{{ param.value }}{% if param.changed %} <span class="muted">(changed)</span>{% endif %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="muted">No parameters recorded.</p>
+  {% endif %}
+
+  <h2>Changes from {% if run.parent %}<a href="{% url 'experiments:run' run.experiment.name run.parent.version %}">v{{ run.parent.version }}</a>{% else %}the previous version{% endif %}</h2>
+  {% if run.parent %}<p><a href="{% url 'experiments:compare' run.experiment.name %}?a={{ run.parent.version }}&amp;b={{ run.version }}">Compare v{{ run.parent.version }} and v{{ run.version }} side by side</a></p>{% endif %}
+  {% if not run.parent %}
+    <p class="muted">This is the first run, so there is nothing to compare with.</p>
+  {% elif param_changes or metric_changes %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th></th><th>Name</th><th class="num">v{{ run.parent.version }}</th><th class="num">v{{ run.version }}</th><th class="num">Change</th></tr></thead>
+        <tbody>
+          {% for change in param_changes %}
+            <tr><td class="muted">param</td><td><code>{{ change.name }}</code></td><td class="num">{{ change.old }}</td><td class="num">{{ change.new }}</td>
+              <td class="num">{% if change.delta is not None %}{% if change.delta > 0 %}+{% endif %}{{ change.delta|floatformat:"-3" }}{% else %}–{% endif %}</td></tr>
+          {% endfor %}
+          {% for change in metric_changes %}
+            <tr><td class="muted">metric</td><td>{{ change.name }}</td><td class="num">{{ change.old }}</td><td class="num">{{ change.new }}</td>
+              <td class="num {{ change.direction }}">{% if change.delta is not None %}{% if change.delta > 0 %}+{% endif %}{{ change.delta|floatformat:3 }}{% else %}–{% endif %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="muted">No parameters or metrics changed.</p>
+  {% endif %}
+
+  <h2>Details</h2>
+  <div class="table-wrap">
+    <table>
+      <tbody>
+        <tr><th>Created</th><td>{{ run.created_at|date:"Y-m-d H:i:s" }}</td></tr>
+        <tr><th>Duration</th><td>{% if run.duration_seconds is not None %}{{ run.duration_seconds|floatformat:1 }} s{% else %}–{% endif %}</td></tr>
+        <tr><th>Checkpoint</th><td>{% if run.checkpoint_path %}<code>{{ run.checkpoint_path }}</code>{% else %}–{% endif %}</td></tr>
+        <tr><th>Data hash (SHA-256)</th><td>{% if run.data_hash %}<code>{{ run.data_hash }}</code>{% else %}–{% endif %}</td></tr>
+        <tr><th>Git commit</th><td>{% if run.git_commit %}<code>{{ run.git_commit }}</code>{% else %}–{% endif %}</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
