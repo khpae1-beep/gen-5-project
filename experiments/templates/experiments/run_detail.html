@@ -9,13 +9,21 @@
   <h1>v{{ run.version }}{% if promoted %} <span class="badge">promoted</span>{% endif %}</h1>
   <p>{{ run.version_note|default:"No version note." }}</p>
 
-  <form method="post" action="{% url 'experiments:promote' run.experiment.name run.version %}"
-        onsubmit="return confirm('Promote {{ run.experiment.name|escapejs }} v{{ run.version }}? It replaces the model publish_predictions serves.');">
-    {% csrf_token %}
-    <button type="submit"{% if promoted or checkpoint_problem %} disabled{% endif %}>Promote this version</button>
-    {% if promoted %}<span class="muted">This version is the promoted model.</span>
-    {% elif checkpoint_problem %}<span class="muted">{{ checkpoint_problem }}</span>{% endif %}
-  </form>
+  {% if user.is_active and user.is_staff %}
+    <form method="post" action="{% url 'experiments:promote' run.experiment.name run.version %}"
+          onsubmit="return confirm('Promote {{ run.experiment.name|escapejs }} v{{ run.version }}? It replaces the model publish_predictions serves.');">
+      {% csrf_token %}
+      <button type="submit"{% if promoted or checkpoint_problem %} disabled{% endif %}>Promote this version</button>
+      {% if promoted %}<span class="muted">This version is the promoted model.</span>
+      {% elif checkpoint_problem %}<span class="muted">{{ checkpoint_problem }}</span>{% endif %}
+    </form>
+  {% else %}
+    <p>
+      <button type="button" disabled>Promote this version</button>
+      {% if promoted %}<span class="muted">This version is the promoted model.</span>
+      {% else %}<span class="muted">Only staff can promote. <a href="{% url 'admin:login' %}?next={{ request.path|urlencode }}">Log in as a staff user at /admin/</a> to promote.</span>{% endif %}
+    </p>
+  {% endif %}
 
   <h2>Metrics</h2>
   {% if metric_rows or other_metrics %}

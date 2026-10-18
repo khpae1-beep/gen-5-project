@@ -4,6 +4,7 @@ from django.db.models.functions import Cast
 import re
 
 from django.contrib import messages
+from django.contrib.admin.views.decorators import staff_member_required
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
@@ -143,8 +144,9 @@ def run_detail(request, name, version):
 
 
 @require_POST
+@staff_member_required
 def promote_run(request, name, version):
-    """Same as `python manage.py promote_run <name> <version>`."""
+    """Same as `python manage.py promote_run <name> <version>`. Staff only; others are sent to the admin login."""
     run = get_run(name, version)
     try:
         promote(run)

@@ -3,6 +3,7 @@ import tempfile
 from pathlib import Path
 from unittest import mock
 
+from django.contrib.auth import get_user_model
 from django.test import Client, TestCase
 from django.urls import reverse
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
@@ -55,6 +56,9 @@ class ExperimentPagesTestCase(TestCase):
             run.version_note = f'v{version}: note {version}'
             run.save()
             self.runs.append(run)
+
+    def make_user(self, username='staff', is_staff=True):
+        return get_user_model().objects.create_user(username, password='pw', is_staff=is_staff)
 
     def mark_promoted(self, version, experiment='heart-disease-rf'):
         self.info_path.parent.mkdir(parents=True, exist_ok=True)
@@ -149,7 +153,25 @@ class RunDetailTests(ExperimentPagesTestCase):
         for text in (run.checkpoint_path, run.data_hash or '–', 'abc123def456', '1.5 s', 'v3: note 3',
                      'Compare v2 and v3 side by side'):
             self.assertContains(response, text)
+
+    def test_non_staff_see_a_disabled_button_and_login_note(self, get_llm):
+        self.client.force_login(self.make_user('viewer', is_staff=False))
+        for client in (Client(), self.client):
+            with self.subTest(anonymous=client is not self.client):
+                response = client.get(self.url(3))
+                self.assertContains(response, '<button type="button" disabled>Promote this version</button>', html=True)
+                self.assertContains(
+                    response, '<a href="/admin/login/?next=/experiments/heart-disease-rf/v3/">'
+                    'Log in as a staff user at /admin/</a>', html=True,
+                )
+                self.assertNotContains(response, 'csrfmiddlewaretoken')
+                self.assertNotContains(response, reverse('experiments:promote', args=['heart-disease-rf', 3]))
+
+    def test_staff_see_the_promote_form(self, get_llm):
+        self.client.force_login(self.make_user())
+        response = self.client.get(self.url(3))
         self.assertContains(response, '<button type="submit">Promote this version</button>', html=True)
+        self.assertNotContains(response, 'Only staff can promote')
 
     def test_first_run_has_nothing_to_compare(self, get_llm):
         response = self.client.get(self.url(1))
@@ -157,6 +179,7 @@ class RunDetailTests(ExperimentPagesTestCase):
         self.assertNotContains(response, 'side by side')
 
     def test_promote_button_disabled_when_promoted_or_checkpoint_missing(self, get_llm):
+        self.client.force_login(self.make_user())
         self.mark_promoted(3)
         disabled = '<button type="submit" disabled>Promote this version</button>'
         response = self.client.get(self.url(3))
@@ -174,6 +197,11 @@ class RunDetailTests(ExperimentPagesTestCase):
 
 @mock.patch('experiments.comparison.get_llm', side_effect=no_llm)
 class PromoteViewTests(ExperimentPagesTestCase):
+    def setUp(self):
+        super().setUp()
+        self.staff = self.make_user()
+        self.client.force_login(self.staff)
+
     def url(self, version):
         return reverse('experiments:promote', args=['heart-disease-rf', version])
 
@@ -198,9 +226,24 @@ class PromoteViewTests(ExperimentPagesTestCase):
 
     def test_requires_post_and_csrf(self, get_llm):
         self.assertEqual(self.client.get(self.url(2)).status_code, 405)
-        self.assertEqual(Client(enforce_csrf_checks=True).post(self.url(2)).status_code, 403)
+        csrf_client = Client(enforce_csrf_checks=True)
+        csrf_client.force_login(self.staff)
+        self.assertEqual(csrf_client.post(self.url(2)).status_code, 403)
         self.assertEqual(self.client.post(self.url(9)).status_code, 404)
         self.assertFalse(self.model_path.exists())
+
+    def test_requires_staff(self, get_llm):
+        non_staff = Client()
+        non_staff.force_login(self.make_user('viewer', is_staff=False))
+        for name, client in (('anonymous', Client()), ('non-staff', non_staff)):
+            with self.subTest(name):
+                response = client.post(self.url(2))
+                self.assertRedirects(
+                    response, f'/admin/login/?next={self.url(2)}', fetch_redirect_response=False,
+                )
+        self.assertFalse(self.model_path.exists())
+        self.assertFalse(self.info_path.exists())
+        self.assertEqual(Client().get(self.url(2)).status_code, 405)
 
     def test_run_page_form_posts_with_csrf_token(self, get_llm):
         response = self.client.get(reverse('experiments:run', args=['heart-disease-rf', 2]))
