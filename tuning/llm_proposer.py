@@ -3,7 +3,8 @@
 The LLM sees the search space and every earlier trial's params and CV score (never test
 accuracy), and replies with JSON: {"params": {...}, "reason": "one sentence"}. A reply that is
 not valid JSON, has params outside the space or repeats an earlier trial is replaced by a
-random proposal, and the reasoning says why.
+random proposal, and the reasoning says why. If only the reason is wrong about how the params
+changed, the params are kept and the reason is replaced by a code-written description.
 """
 import json
 import re
@@ -15,6 +16,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from core.llm import get_llm
 
 from .models import Trial
+from .reason_check import ReasonCheckError, check_reason, describe_change
 from .search_space import InvalidParams, describe_space, params_key, sample_unique_params, validate_params
 
 MAX_REASON_LENGTH = 300
@@ -88,22 +90,30 @@ def parse_reply(reply, space):
     reason = ' '.join(reason.split()) if isinstance(reason, str) else ''
     if len(reason) > MAX_REASON_LENGTH:
         reason = reason[:MAX_REASON_LENGTH - 1].rstrip() + '…'
-    return validate_params(params, space), reason or 'The LLM gave no reason.'
+    return validate_params(params, space), reason
 
 
 def llm_proposal(space, history, llm, cv_folds):
-    """Ask the LLM; returns (params, reason) or raises InvalidProposal/InvalidParams."""
-    chain = PROPOSE_PROMPT | llm | StrOutputParser()
-    reply = chain.invoke({
-        'space': describe_space(space),
-        'history': describe_history(history),
-        'cv_folds': cv_folds,
-    })
+    """Ask the LLM; returns (params, checked reason) or raises InvalidProposal/InvalidParams."""
+    inputs = {'space': describe_space(space), 'history': describe_history(history), 'cv_folds': cv_folds}
+    reply = (PROPOSE_PROMPT | llm | StrOutputParser()).invoke(inputs)
     params, reason = parse_reply(reply, space)
     earlier = {params_key(t['params']): t['number'] for t in history}
     if params_key(params) in earlier:
         raise InvalidProposal(f'the LLM repeated the params of trial {earlier[params_key(params)]}')
-    return params, reason
+    return params, checked_reason(reason, params, history[-1]['params'] if history else None, inputs)
+
+
+def checked_reason(reason, params, previous, inputs):
+    """The LLM's reason if it matches the change from the previous trial, else a code-written one."""
+    description = describe_change(params, previous)
+    if not reason:
+        return f'{description} (The LLM gave no reason.)'
+    try:
+        check_reason(reason, params, previous, f'{inputs["space"]}\n{inputs["history"]}\n{inputs["cv_folds"]}')
+    except ReasonCheckError as exc:
+        return f"{description} The LLM's reason failed the fact check ({exc})."
+    return reason
 
 
 def propose_next(space, history, rng, llm=None, cv_folds=5):

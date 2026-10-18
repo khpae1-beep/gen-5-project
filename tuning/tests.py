@@ -16,6 +16,7 @@ from experiments.tests import write_heart_csv
 from tuning.engine import run_job
 from tuning.llm_proposer import propose_next
 from tuning.models import Trial, TuningJob
+from tuning.reason_check import ReasonCheckError, check_reason, describe_change, direction_claims
 from tuning.scoring import make_split
 from tuning.search_space import (
     HEART_DISEASE_RF_SPACE as SPACE, InvalidParams, params_key, sample_params, sample_unique_params, validate_params,
@@ -138,9 +139,134 @@ class ProposerTests(TestCase):
         # The fallback is reproducible with the same seed.
         self.assertEqual(self.propose(RunnableLambda(unavailable)).params, proposal.params)
 
+    def test_keeps_params_but_replaces_a_wrong_reason(self):
+        # The previous trial (2) had n_estimators 300; the proposal lowers it to 250.
+        params = {**self.NEW, 'n_estimators': 250}
+        proposal = self.propose(FakeListChatModel(responses=[reply(params, 'Increase n_estimators to explore more capacity.')]))
+
+        self.assertEqual(proposal.proposed_by, Trial.PROPOSED_BY_LLM)
+        self.assertEqual(proposal.params, params)
+        self.assertEqual(
+            proposal.reasoning,
+            'Changed n_estimators 300→250, max_depth 8→None; kept min_samples_split 4, min_samples_leaf 2, '
+            "max_features log2 compared with the previous trial. The LLM's reason failed the fact check "
+            '(it says n_estimators should increase, but it goes from 300 to 250).',
+        )
+
+    def test_keeps_a_correct_reason(self):
+        reason = 'Raise n_estimators to 400 and remove the depth limit, since trial 2 scored 0.8610.'
+        proposal = self.propose(FakeListChatModel(responses=[reply(self.NEW, reason)]))
+        self.assertEqual(proposal.reasoning, reason)
+
     def test_accepts_params_at_top_level_and_missing_reason(self):
         proposal = self.propose(FakeListChatModel(responses=[json.dumps(self.NEW)]))
-        self.assertEqual((proposal.params, proposal.reasoning), (self.NEW, 'The LLM gave no reason.'))
+        self.assertEqual(proposal.params, self.NEW)
+        self.assertEqual(
+            proposal.reasoning,
+            'Changed n_estimators 300→400, max_depth 8→None; kept min_samples_split 4, min_samples_leaf 2, '
+            'max_features log2 compared with the previous trial. (The LLM gave no reason.)',
+        )
+
+
+def P(n_estimators, max_depth, min_samples_split, min_samples_leaf, max_features):
+    return {
+        'n_estimators': n_estimators, 'max_depth': max_depth, 'min_samples_split': min_samples_split,
+        'min_samples_leaf': min_samples_leaf, 'max_features': max_features,
+    }
+
+
+class ReasonCheckTests(TestCase):
+    SHOWN = 'Trial 1 ... Trial 2 ... CV accuracy 0.8504 ± 0.0640'
+
+    def check(self, reason, params, previous):
+        check_reason(reason, params, previous, self.SHOWN)
+
+    def test_real_llm_reasons(self):
+        # Reasons llama3.2 gave in a real run, with each trial's previous params.
+        accepted = [
+            (None, P(300, None, 10, 5, 'sqrt'),
+             'Starting with a moderate number of estimators, no limit on max depth, and a balance between '
+             'splitting and leaf size'),
+            (P(100, 5, 12, 3, 'log2'), P(250, 12, 8, 9, 'sqrt'),
+             "Increase n_estimators and max_depth, decrease min_samples_split and increase min_samples_leaf, and "
+             "try a different max_features value to improve upon trial 2's score"),
+        ]
+        for previous, params, reason in accepted:
+            with self.subTest(reason):
+                self.check(reason, params, previous)
+
+        rejected = [
+            (P(300, None, 10, 5, 'sqrt'), P(200, 15, 5, 2, 'log2'),
+             'Decrease n_estimators and max_depth, increase min_samples_split and decrease min_samples_leaf to '
+             'potentially improve model complexity and reduce overfitting',
+             'it says min_samples_split should increase, but it goes from 10 to 5'),
+            (P(200, 15, 5, 2, 'log2'), P(400, 10, 15, 8, None),
+             'Increase n_estimators and max_depth, decrease min_samples_split and min_samples_leaf, and set '
+             'max_features to null to potentially improve accuracy',
+             'it says max_depth should increase, but it goes from 15 to 10'),
+            (P(400, 10, 15, 8, None), P(100, 5, 12, 3, 'log2'),
+             "Try a smaller n_estimators, a shallower max_depth, and a larger min_samples_split to balance the "
+             "model, while keeping max_features as 'log2' which performed well in trial 2",
+             'it says min_samples_split should increase, but it goes from 15 to 12'),
+        ]
+        for previous, params, reason, message in rejected:
+            with self.subTest(reason), self.assertRaisesMessage(ReasonCheckError, message):
+                self.check(reason, params, previous)
+
+    def test_reads_claims_and_synonyms(self):
+        self.assertEqual(
+            direction_claims('Use more trees, a shallower tree depth and keep the maximum features.'),
+            [('n_estimators', 'up'), ('max_depth', 'down'), ('max_features', 'same')],
+        )
+        self.assertEqual(
+            direction_claims('Fewer decision trees and deeper trees; raise the minimum samples per leaf.'),
+            [('n_estimators', 'down'), ('max_depth', 'up'), ('min_samples_leaf', 'up')],
+        )
+        # Not claims: no direction, "complex trees", or a direction too far away or after a stop word.
+        self.assertEqual(direction_claims('Allow for more complex decision trees.'), [])
+        self.assertEqual(direction_claims('Increase the model capacity a lot, which helps n_estimators.'), [])
+        self.assertEqual(direction_claims('Try n_estimators 300.'), [])
+
+    def test_no_limit_is_the_deepest_max_depth(self):
+        self.check('Limit the depth to reduce overfitting.', P(100, 15, 2, 1, 'sqrt'), P(100, None, 2, 1, 'sqrt'))
+        self.check('Increase max_depth to null.', P(100, None, 2, 1, 'sqrt'), P(100, 15, 2, 1, 'sqrt'))
+        with self.assertRaisesMessage(ReasonCheckError, 'max_depth should increase, but it goes from None to 15'):
+            self.check('Increase max_depth.', P(100, 15, 2, 1, 'sqrt'), P(100, None, 2, 1, 'sqrt'))
+
+    def test_same_and_unchanged_claims(self):
+        previous = P(100, 8, 2, 1, 'sqrt')
+        self.check('Raise n_estimators but keep max_features.', P(200, 8, 2, 1, 'sqrt'), previous)
+        with self.assertRaisesMessage(ReasonCheckError, 'max_features stays the same, but it changes from sqrt to log2'):
+            self.check('Keep max_features.', P(100, 8, 2, 1, 'log2'), previous)
+        with self.assertRaisesMessage(ReasonCheckError, 'min_samples_leaf should increase, but it stays at 1'):
+            self.check('Raise n_estimators and min_samples_leaf.', P(200, 8, 2, 1, 'sqrt'), previous)
+
+    def test_first_trial_cannot_claim_a_change(self):
+        with self.assertRaisesMessage(ReasonCheckError, 'there is no previous trial'):
+            self.check('Increase n_estimators for stability.', P(300, None, 2, 1, 'sqrt'), None)
+
+    def test_values_and_numbers(self):
+        previous, params = P(200, 8, 2, 1, 'sqrt'), P(300, None, 2, 1, 'sqrt')
+        self.check('Increase n_estimators from 200 to 300 and max_depth to null; trial 2 scored 0.8504.', params, previous)
+        cases = {
+            'Increase n_estimators to 400.': 'it says n_estimators goes to 400, but the proposal has 300',
+            'Raise n_estimators from 100 to 300.': 'it says n_estimators goes from 100, but that is not the previous value',
+            'This should reach 0.9 accuracy.': 'numbers that are not in the data: 0.9',
+        }
+        for reason, message in cases.items():
+            with self.subTest(reason), self.assertRaisesMessage(ReasonCheckError, message):
+                self.check(reason, params, previous)
+
+    def test_describe_change(self):
+        self.assertEqual(
+            describe_change(P(200, 15, 5, 2, 'log2'), P(300, None, 10, 2, 'log2')),
+            'Changed n_estimators 300→200, max_depth None→15, min_samples_split 10→5; kept min_samples_leaf 2, '
+            'max_features log2 compared with the previous trial.',
+        )
+        self.assertEqual(
+            describe_change(P(300, None, 10, 5, None), None),
+            'First trial: n_estimators 300, max_depth None, min_samples_split 10, min_samples_leaf 5, max_features None.',
+        )
 
 
 class TuningTestCase(TestCase):
