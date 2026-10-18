@@ -1,10 +1,9 @@
-import json
-
 from django.contrib import messages
 from django.contrib.admin.views.decorators import staff_member_required
 from django.db.models import Count
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.utils.dateparse import parse_datetime
 from django.views.decorators.http import require_POST
 
 from .engine import TrialError, add_trial
@@ -39,8 +38,16 @@ def time_taken(job):
 def job_context(job):
     """Everything the job page shows; used by the page and by the POST actions that re-render it."""
     trials = list(job.trials.select_related('run__experiment').order_by('number'))
+    suggestions = job.suggestions or None
+    if suggestions:
+        suggestions = {
+            **suggestions,
+            'created_at': parse_datetime(suggestions['created_at']),
+            'configs': [{**config, 'params_text': format_params(config['params'])} for config in suggestions['configs']],
+        }
     return {
         'job': job,
+        'suggestions': suggestions,
         'trials': [{'trial': t, 'params': format_params(t.params), 'best': t.pk == job.best_trial_id} for t in trials],
         'time_taken': time_taken(job),
         'chart_data': {
@@ -109,21 +116,33 @@ def compare(request):
 @require_POST
 @staff_member_required
 def suggest(request, pk):
-    """The job page plus the LLM's suggested next configurations. Only this POST calls the LLM."""
-    job = get_object_or_404(TuningJob.objects.select_related('best_trial'), pk=pk)
-    context = job_context(job)
-    context['suggestions'] = suggest_next(job, [row['trial'] for row in context['trials']])
-    return render(request, 'tuning/job_detail.html', context)
+    """Ask the LLM for the next configurations, save them on the job and go back to its page.
+
+    Only this POST calls the LLM; the redirect means refreshing the page does not ask again.
+    """
+    job = get_object_or_404(TuningJob, pk=pk)
+    job.suggestions = suggest_next(job, list(job.trials.order_by('number'))).as_json()
+    job.save(update_fields=['suggestions'])
+    return redirect(reverse('tuning:detail', args=[job.pk]) + '#suggestions')
 
 
 @require_POST
 @staff_member_required
 def try_suggestion(request, pk):
-    """Run one trial with a suggestion's params and add it to the job."""
+    """Run one trial with saved suggestion number `index` and add it to the job."""
     job = get_object_or_404(TuningJob, pk=pk)
+    configs = (job.suggestions or {}).get('configs', [])
     try:
-        params = validate_params(json.loads(request.POST.get('params', '')), job.search_space)
-    except (ValueError, InvalidParams) as exc:  # json.JSONDecodeError is a ValueError.
+        index = int(request.POST.get('index', ''))
+        config = configs[index] if index >= 0 else None
+    except (ValueError, IndexError):
+        config = None
+    if config is None:
+        messages.error(request, 'Could not try that suggestion: it is no longer saved on this job.')
+        return redirect('tuning:detail', pk=job.pk)
+    try:
+        params = validate_params(config['params'], job.search_space)
+    except InvalidParams as exc:
         messages.error(request, f'Could not try that suggestion: invalid params ({exc}).')
         return redirect('tuning:detail', pk=job.pk)
 
@@ -131,7 +150,7 @@ def try_suggestion(request, pk):
     if not trials:
         messages.error(request, 'Could not try that suggestion: the job has no trials.')
         return redirect('tuning:detail', pk=job.pk)
-    reasoning, status = recheck_reason(job, trials, params, request.POST.get('reason', '').strip())
+    reasoning, status = recheck_reason(job, trials, params, config.get('llm_reason', ''))
     try:
         trial, new_best = add_trial(job, Proposal(params, reasoning, Trial.PROPOSED_BY_SUGGESTION, status))
     except TrialError as exc:
@@ -139,6 +158,8 @@ def try_suggestion(request, pk):
         return redirect('tuning:detail', pk=job.pk)
 
     job.refresh_from_db()
+    job.suggestions['configs'][index]['tried_trial'] = trial.number
+    job.save(update_fields=['suggestions'])
     outcome = 'the new best trial.' if new_best else f'the best is still trial {job.best_trial.number}.'
     messages.success(request, f'Trial {trial.number}: CV accuracy {trial.cv_score:.4f} ± {trial.cv_std:.4f}; {outcome}')
     return redirect(reverse('tuning:detail', args=[job.pk]) + f'#trial-{trial.number}')

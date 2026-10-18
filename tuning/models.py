@@ -27,6 +27,9 @@ class TuningJob(models.Model):
     # The data and split the trials were scored on, so more trials can be added later.
     data_path = models.CharField(max_length=500, blank=True)
     test_size = models.FloatField(default=0.2)
+    # The latest "Suggest next experiments" result: {'created_at', 'configs': [{'params', 'reasoning',
+    # 'reason_check', 'llm_reason', 'tried_trial'}], 'rejected': [...], 'error': ''}; {} before any.
+    suggestions = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     # Blank for jobs that are still running or were run before this was recorded.
     finished_at = models.DateTimeField(null=True, blank=True)

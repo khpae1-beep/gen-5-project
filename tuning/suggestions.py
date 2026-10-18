@@ -6,10 +6,12 @@ fallback: if the LLM fails, there are simply no suggestions.
 """
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
+
+from django.utils import timezone
 
 from core.llm import get_llm
 
@@ -48,16 +50,21 @@ class Suggestion:
     reason_check: str  # A Trial.REASON_* value.
     llm_reason: str = ''  # The LLM's own reason, re-checked when the suggestion is tried.
 
-    @property
-    def params_json(self):
-        return json.dumps(self.params)
-
 
 @dataclass
 class SuggestionResult:
     suggestions: list = field(default_factory=list)
     rejected: list = field(default_factory=list)  # Why each unusable suggestion was dropped.
     error: str = ''
+
+    def as_json(self):
+        """The result as stored in TuningJob.suggestions."""
+        return {
+            'created_at': timezone.now().isoformat(),
+            'configs': [{**asdict(s), 'tried_trial': None} for s in self.suggestions],
+            'rejected': self.rejected,
+            'error': self.error,
+        }
 
 
 def best_trial_of(trials):

@@ -73,18 +73,22 @@
     {% endif %}
 
     {% if suggestions %}
+      <p class="muted">Suggested {{ suggestions.created_at|date:"Y-m-d H:i" }}{% if user.is_active and user.is_staff %}; ask again for new ones{% endif %}.</p>
       {% if suggestions.error %}<p class="empty">{{ suggestions.error }}</p>{% endif %}
-      {% for suggestion in suggestions.suggestions %}
+      {% for config in suggestions.configs %}
         <div class="explanation" style="margin-top: 12px;">
-          <p style="margin-top: 0;"><strong>Suggestion {{ forloop.counter }}</strong>: <code>{% for name, value in suggestion.params.items %}{{ name }}={{ value|default_if_none:"None" }}{% if not forloop.last %}, {% endif %}{% endfor %}</code></p>
-          <p>{{ suggestion.reasoning }}</p>
-          <form method="post" action="{% url 'tuning:try' job.pk %}" style="margin: 0;">
-            {% csrf_token %}
-            <input type="hidden" name="params" value="{{ suggestion.params_json }}">
-            <input type="hidden" name="reason" value="{{ suggestion.llm_reason }}">
-            <button type="submit" class="secondary">Try this</button>
-            <span class="muted">Runs one trial with these params ({{ job.cv_folds }}-fold CV) and adds it to this job.</span>
-          </form>
+          <p style="margin-top: 0;"><strong>Suggestion {{ forloop.counter }}</strong>: <code>{{ config.params_text }}</code></p>
+          <p>{{ config.reasoning }}</p>
+          {% if config.tried_trial %}
+            <p class="muted" style="margin-bottom: 0;">Tried as <a href="#trial-{{ config.tried_trial }}">trial {{ config.tried_trial }}</a>.</p>
+          {% elif user.is_active and user.is_staff %}
+            <form method="post" action="{% url 'tuning:try' job.pk %}" style="margin: 0;">
+              {% csrf_token %}
+              <input type="hidden" name="index" value="{{ forloop.counter0 }}">
+              <button type="submit" class="secondary">Try this</button>
+              <span class="muted">Runs one trial with these params ({{ job.cv_folds }}-fold CV) and adds it to this job.</span>
+            </form>
+          {% endif %}
         </div>
       {% endfor %}
       {% for note in suggestions.rejected %}<p class="muted">{{ note }}</p>{% endfor %}
