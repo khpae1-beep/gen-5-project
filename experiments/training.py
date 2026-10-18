@@ -27,7 +27,9 @@ def load_data(path):
     return data.drop(columns=[LABEL_COLUMN]), data[LABEL_COLUMN]
 
 
-def build_pipeline(n_estimators=100, max_depth=None, min_samples_split=2, random_state=42):
+def build_pipeline(n_estimators=100, max_depth=None, min_samples_split=2, random_state=42,
+                   min_samples_leaf=1, max_features='sqrt'):
+    """The imputer, scaler and random forest pipeline. Defaults match RandomForestClassifier's."""
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.impute import SimpleImputer
     from sklearn.pipeline import Pipeline
@@ -40,6 +42,8 @@ def build_pipeline(n_estimators=100, max_depth=None, min_samples_split=2, random
             n_estimators=n_estimators,
             max_depth=max_depth,
             min_samples_split=min_samples_split,
+            min_samples_leaf=min_samples_leaf,
+            max_features=max_features,
             random_state=random_state,
         )),
     ])
