@@ -18,6 +18,20 @@
       <select id="b" name="b">{% for v in versions %}<option value="{{ v }}"{% if v == run_b.version %} selected{% endif %}>v{{ v }}</option>{% endfor %}</select>
       <button type="submit" class="secondary">Compare</button>
     </form>
+    <form method="post" action="{% url 'experiments:explain' experiment.name %}" style="margin-top: 12px;">
+      {% csrf_token %}
+      <input type="hidden" name="a" value="{{ run_a.version }}">
+      <input type="hidden" name="b" value="{{ run_b.version }}">
+      <button type="submit">Explain the difference</button>
+      <span class="muted">Asks the LLM, then checks its answer against the numbers below.</span>
+    </form>
+    {% if explanation %}
+      <div class="explanation" style="margin-top: 12px;">
+        <p style="margin-top: 0;">{{ explanation.text }}</p>
+        <p class="muted" style="margin-bottom: 0;">{% if explanation.used_llm %}Written by the LLM and checked against the numbers.{% else %}Written from the numbers, because {{ explanation.reason }}.{% endif %}</p>
+      </div>
+    {% endif %}
+
     <p class="muted">Highlighted rows differ. Changes are v{{ run_b.version }} minus v{{ run_a.version }}; for test accuracy, precision, recall and F1, green is better and red is worse.</p>
 
     {% for title, rows in comparison.items %}

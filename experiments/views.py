@@ -7,7 +7,7 @@ from django.contrib import messages
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
-from .comparison import compare_runs
+from .comparison import compare_runs, explain_difference
 from .models import Experiment, Run
 from .promotion import PromotionError, checkpoint_problem, current_promotion, promote
 from .versioning import format_value, metric_label
@@ -185,3 +185,13 @@ def comparison_context(request_data, name):
 
 def compare(request, name):
     return render(request, 'experiments/compare.html', comparison_context(request.GET, name))
+
+
+@require_POST
+def explain(request, name):
+    """The compare page plus an explanation of the difference. Only this POST calls the LLM."""
+    context = comparison_context(request.POST, name)
+    if 'run_a' in context:
+        text, used_llm, reason = explain_difference(context['run_a'], context['run_b'])
+        context['explanation'] = {'text': text, 'used_llm': used_llm, 'reason': reason}
+    return render(request, 'experiments/compare.html', context)
