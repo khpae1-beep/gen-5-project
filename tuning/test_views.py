@@ -15,7 +15,7 @@ from experiments.tests import write_heart_csv
 from tuning.engine import run_job
 from tuning.models import Trial, TuningJob
 from tuning.scoring import make_split
-from tuning.search_space import HEART_DISEASE_RF_SPACE as SPACE
+from tuning.search_space import HEART_DISEASE_RF_SPACE as SPACE, validate_params
 
 
 def no_llm(*args, **kwargs):
@@ -195,73 +195,108 @@ class SuggestTests(TuningPagesTestCase):
     def detail_url(self):
         return reverse('tuning:detail', args=[self.job.pk])
 
-    def reply(self):
+    def suggest(self, reply):
+        """POST "Suggest next experiments" as staff with a fake LLM; returns the saved configs."""
+        self.client.force_login(self.make_user(f'staff{get_user_model().objects.count()}'))
+        llm = FakeListChatModel(responses=[reply])
+        with mock.patch('tuning.suggestions.get_llm', return_value=llm) as get_llm:
+            response = self.client.post(self.url())
+        get_llm.assert_called_once_with(temperature=0)
+        self.assertRedirects(response, self.detail_url() + '#suggestions', fetch_redirect_response=False)
+        self.job.refresh_from_db()
+        return self.job.suggestions['configs']
+
+    def good_suggestion(self):
         best = self.best.params
         good = self.untried(min_samples_leaf=best['min_samples_leaf'])
         good['n_estimators'] = 500 if best['n_estimators'] < 500 else 50
         direction = 'more' if good['n_estimators'] > best['n_estimators'] else 'fewer'
-        wrong = self.untried(max_features='log2' if best['max_features'] != 'log2' else 'sqrt')
-        wrong_direction = 'larger' if wrong['n_estimators'] < best['n_estimators'] else 'smaller'
-        self.good, self.wrong = good, wrong
-        self.good_reason = f'Use {direction} trees than trial {self.best.number}.'
-        return json.dumps({'suggestions': [
-            suggestion(good, self.good_reason),
-            suggestion({**good, 'n_estimators': 9999}, 'Far more trees.'),
+        return good, f'Use {direction} trees than trial {self.best.number}.'
+
+    def assert_random_fill(self, config, fill_reason):
+        tried = {json.dumps(t.params, sort_keys=True) for t in Trial.objects.filter(job=self.job)}
+        self.assertEqual(config['source'], 'random')
+        self.assertEqual(config['label'], f'random ({fill_reason})')
+        self.assertEqual(config['reasoning'], f'Random fallback: the {fill_reason}.')
+        self.assertEqual((config['reason_check'], config['llm_reason']), ('', ''))
+        self.assertEqual(validate_params(config['params'], SPACE), config['params'])
+        self.assertNotIn(json.dumps(config['params'], sort_keys=True), tried)
+
+    def test_repeated_suggestions_are_replaced_with_random_ones(self):
+        good, reason = self.good_suggestion()
+        configs = self.suggest(json.dumps({'suggestions': [
+            suggestion(good, reason),
             suggestion(self.trials[0].params, 'Repeat trial 1.'),
-            suggestion(good, 'The same again.'),
-            suggestion(wrong, f'A {wrong_direction} n_estimators.'),
-        ]})
+            suggestion(good, 'The same as suggestion 1.'),
+        ]}))
 
-    def test_saves_validated_checked_suggestions_and_redirects(self):
-        self.login_staff()
-        llm = FakeListChatModel(responses=[self.reply()])
-        with mock.patch('tuning.suggestions.get_llm', return_value=llm) as get_llm:
-            response = self.client.post(self.url())
+        self.assertEqual(len(configs), 3)
+        self.assertEqual(configs[0]['params'], good)
+        self.assertEqual((configs[0]['source'], configs[0]['label']), ('llm', 'LLM'))
+        self.assertEqual((configs[0]['reasoning'], configs[0]['reason_check']), (reason, Trial.REASON_PASSED))
+        self.assert_random_fill(configs[1], 'LLM repeated trial 1')
+        self.assert_random_fill(configs[2], 'LLM repeated suggestion 1')
+        keys = {json.dumps(c['params'], sort_keys=True) for c in configs}
+        self.assertEqual(len(keys), 3)  # All three differ.
 
-        get_llm.assert_called_once_with(temperature=0)
-        self.assertRedirects(response, self.detail_url() + '#suggestions', fetch_redirect_response=False)
-        self.job.refresh_from_db()
-        saved = self.job.suggestions
-        configs = saved['configs']
-        self.assertEqual([c['params'] for c in configs], [self.good, self.wrong])
-        self.assertEqual([c['reason_check'] for c in configs], [Trial.REASON_PASSED, Trial.REASON_FAILED])
-        self.assertEqual([c['tried_trial'] for c in configs], [None, None])
-        self.assertEqual((configs[0]['reasoning'], configs[0]['llm_reason']), (self.good_reason, self.good_reason))
-        self.assertIn(f"compared with the best trial (trial {self.best.number}). The LLM's reason failed the fact check",
-                      configs[1]['reasoning'])
-        self.assertEqual(saved['rejected'], [
-            'Suggestion 2 was dropped: n_estimators=9999 is outside 50–500.',
-            'Suggestion 3 was dropped: it repeats trial 1.',
-            'Suggestion 4 was dropped: it repeats an earlier suggestion.',
-        ])
-        self.assertEqual(saved['error'], '')
-
-        # Reloading the page shows the saved suggestions without calling the LLM again.
+        # Reloading shows the saved suggestions and their labels without calling the LLM again.
         with mock.patch('tuning.suggestions.get_llm', side_effect=no_llm) as get_llm:
             for _ in range(2):
                 page = self.client.get(self.detail_url())
-                self.assertContains(page, 'Try this', count=2)
-                self.assertContains(page, self.good_reason)
-                self.assertContains(page, 'it repeats trial 1')
-                self.assertContains(page, '<input type="hidden" name="index" value="1">', html=True)
+                self.assertContains(page, 'Try this', count=3)
+                self.assertContains(page, 'random (LLM repeated trial 1)')
+                self.assertContains(page, 'random (LLM repeated suggestion 1)')
+                self.assertContains(page, reason)
         get_llm.assert_not_called()
 
+    def test_random_fills_are_seeded(self):
+        reply = json.dumps({'suggestions': [suggestion(self.trials[0].params, 'Repeat trial 1.')]})
+        first = self.suggest(reply)
+        again = self.suggest(reply)
+        self.assertEqual([c['params'] for c in first], [c['params'] for c in again])
+        self.assert_random_fill(first[0], 'LLM repeated trial 1')
+        self.assert_random_fill(first[1], 'LLM gave only 1 suggestion')
+        self.assert_random_fill(first[2], 'LLM gave only 1 suggestion')
+
+    def test_invalid_suggestions_and_wrong_reasons(self):
+        best = self.best.params
+        wrong = self.untried(max_features='log2' if best['max_features'] != 'log2' else 'sqrt')
+        wrong_direction = 'larger' if wrong['n_estimators'] < best['n_estimators'] else 'smaller'
+        configs = self.suggest(json.dumps({'suggestions': [
+            suggestion(wrong, f'A {wrong_direction} n_estimators.'),
+            suggestion({**wrong, 'n_estimators': 9999}, 'Far more trees.'),
+        ]}))
+
+        self.assertEqual(configs[0]['params'], wrong)
+        self.assertEqual(configs[0]['reason_check'], Trial.REASON_FAILED)
+        self.assertIn(f"compared with the best trial (trial {self.best.number}). The LLM's reason failed the fact check",
+                      configs[0]['reasoning'])
+        self.assert_random_fill(configs[1], 'LLM suggestion was invalid: n_estimators=9999 is outside 50–500')
+        self.assert_random_fill(configs[2], 'LLM gave only 2 suggestions')
+
+    def test_unusable_reply_gives_three_random_suggestions(self):
+        configs = self.suggest('I would try more trees.')
+        for config in configs:
+            self.assert_random_fill(config, 'LLM reply could not be used')
+        self.assertEqual(self.job.suggestions['error'], 'The LLM reply had no JSON. All 3 suggestions are random.')
+
     def test_non_staff_see_saved_suggestions_without_buttons(self):
-        self.login_staff()
-        with mock.patch('tuning.suggestions.get_llm', return_value=FakeListChatModel(responses=[self.reply()])):
-            self.client.post(self.url())
+        good, reason = self.good_suggestion()
+        self.suggest(json.dumps({'suggestions': [suggestion(good, reason)]}))
         page = Client().get(self.detail_url())
-        self.assertContains(page, self.good_reason)
+        self.assertContains(page, reason)
+        self.assertContains(page, 'random (LLM gave only 1 suggestion)', count=2)
         self.assertNotContains(page, 'Try this')
 
     def test_llm_unavailable(self):
         self.login_staff()
         with mock.patch('tuning.suggestions.get_llm', return_value=RunnableLambda(no_llm)):
             response = self.client.post(self.url(), follow=True)
-        self.assertContains(response, 'The LLM was unavailable (AssertionError).')
-        self.assertNotContains(response, 'Try this')
+        self.assertContains(response, 'The LLM was unavailable (AssertionError). All 3 suggestions are random.')
+        self.assertContains(response, 'random (LLM was unavailable)', count=3)
+        self.assertContains(response, 'Try this', count=3)
         self.job.refresh_from_db()
-        self.assertEqual(self.job.suggestions['configs'], [])
+        self.assertEqual([c['source'] for c in self.job.suggestions['configs']], ['random'] * 3)
 
     def test_staff_only_post_only_and_csrf(self):
         with mock.patch('tuning.suggestions.get_llm', side_effect=no_llm) as get_llm:
@@ -326,6 +361,24 @@ class TryTests(TuningPagesTestCase):
         self.assertEqual([c['tried_trial'] for c in self.job.suggestions['configs']], [None, 4])
         self.assertContains(response, 'Tried as <a href="#trial-4">trial 4</a>.', html=True)
         self.assertContains(response, 'Try this', count=1)
+
+    def test_trying_a_random_fill_records_a_random_fallback_trial(self, get_llm):
+        self.login_staff()
+        params = self.untried()
+        reasoning = 'Random fallback: the LLM repeated trial 1.'
+        self.job.suggestions = {
+            'created_at': '2026-10-18T12:00:00+00:00', 'rejected': [], 'error': '',
+            'configs': [{'params': params, 'reasoning': reasoning, 'reason_check': '', 'llm_reason': '',
+                         'source': 'random', 'fill_reason': 'LLM repeated trial 1',
+                         'label': 'random (LLM repeated trial 1)', 'tried_trial': None}],
+        }
+        self.job.save(update_fields=['suggestions'])
+
+        self.try_index(0)
+
+        trial = Trial.objects.get(job=self.job, number=4)
+        self.assertEqual((trial.params, trial.proposed_by), (params, Trial.PROPOSED_BY_FALLBACK))
+        self.assertEqual((trial.reasoning, trial.reason_check), (reasoning, ''))
 
     def test_wrong_reason_is_replaced(self, get_llm):
         self.login_staff()

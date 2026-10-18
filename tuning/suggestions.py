@@ -1,8 +1,9 @@
 """Asking the LLM to suggest the next configurations to try, after a job has run.
 
 Each suggestion must be inside the search space and not already tried, and its reason is
-fact-checked against the best trial with reason_check. Unlike the proposer there is no random
-fallback: if the LLM fails, there are simply no suggestions.
+fact-checked against the best trial with reason_check. There are always N_SUGGESTIONS: a slot
+whose suggestion repeats a trial or an earlier suggestion, is invalid or is missing (including when
+the LLM fails) is filled from the job's seeded random fallback stream and marked with why.
 """
 import json
 import re
@@ -15,8 +16,9 @@ from django.utils import timezone
 
 from core.llm import get_llm
 
+from .engine import fallback_rng
 from .llm_proposer import InvalidProposal, checked_reason, describe_history, proposal_from_dict
-from .search_space import InvalidParams, describe_space, params_key
+from .search_space import InvalidParams, describe_space, params_key, sample_unique_params
 
 N_SUGGESTIONS = 3
 JSON_VALUE = re.compile(r'[\[{].*[\]}]', re.DOTALL)
@@ -43,12 +45,22 @@ SUGGEST_PROMPT = ChatPromptTemplate.from_messages([
 ])
 
 
+SOURCE_LLM = 'llm'
+SOURCE_RANDOM = 'random'
+
+
 @dataclass
 class Suggestion:
     params: dict
     reasoning: str
-    reason_check: str  # A Trial.REASON_* value.
+    reason_check: str  # A Trial.REASON_* value; blank for random fills.
     llm_reason: str = ''  # The LLM's own reason, re-checked when the suggestion is tried.
+    source: str = SOURCE_LLM  # SOURCE_RANDOM when the slot was filled at random.
+    fill_reason: str = ''  # Why a random slot was filled, e.g. "LLM repeated trial 2".
+
+    @property
+    def label(self):
+        return 'LLM' if self.source == SOURCE_LLM else f'random ({self.fill_reason})'
 
 
 @dataclass
@@ -61,7 +73,7 @@ class SuggestionResult:
         """The result as stored in TuningJob.suggestions."""
         return {
             'created_at': timezone.now().isoformat(),
-            'configs': [{**asdict(s), 'tried_trial': None} for s in self.suggestions],
+            'configs': [{**asdict(s), 'label': s.label, 'tried_trial': None} for s in self.suggestions],
             'rejected': self.rejected,
             'error': self.error,
         }
@@ -80,38 +92,47 @@ def suggest_next(job, trials, llm=None):
         return SuggestionResult(error='The job has no trials to learn from yet.')
     best = best_trial_of(trials)
     inputs = prompt_inputs(job, trials, best)
+    result = SuggestionResult()
     try:
         reply = (SUGGEST_PROMPT | (llm or get_llm(temperature=0)) | StrOutputParser()).invoke(inputs)
+        items, error = parse_suggestions(reply)
     except Exception as exc:  # Any provider failure (e.g. Ollama not running).
-        return SuggestionResult(error=f'The LLM was unavailable ({type(exc).__name__}).')
-
-    items, error = parse_suggestions(reply)
+        items, error = [], f'The LLM was unavailable ({type(exc).__name__}).'
     if error:
-        return SuggestionResult(error=error)
+        result.error = f'{error} All {N_SUGGESTIONS} suggestions are random.'
 
-    result = SuggestionResult()
     tried = {params_key(t.params): t.number for t in trials}
-    suggested = set()
-    for index, item in enumerate(items, start=1):
-        if len(result.suggestions) == N_SUGGESTIONS:
-            break
+    suggested = {}  # params_key → slot number of the suggestions made so far.
+    rng = fallback_rng(job.seed)
+
+    def fill(why):
+        params = sample_unique_params(job.search_space, rng, set(tried) | set(suggested))
+        suggested[params_key(params)] = len(result.suggestions) + 1
+        result.suggestions.append(Suggestion(
+            params, f'Random fallback: the {why}.', '', source=SOURCE_RANDOM, fill_reason=why,
+        ))
+
+    for slot, item in enumerate(items[:N_SUGGESTIONS], start=1):
         try:
             params, reason = proposal_from_dict(item, job.search_space)
         except (InvalidParams, InvalidProposal) as exc:
-            result.rejected.append(f'Suggestion {index} was dropped: {exc}.')
+            fill(f'LLM suggestion was invalid: {exc}')
             continue
         key = params_key(params)
         if key in tried:
-            result.rejected.append(f'Suggestion {index} was dropped: it repeats trial {tried[key]}.')
-            continue
-        if key in suggested:
-            result.rejected.append(f'Suggestion {index} was dropped: it repeats an earlier suggestion.')
-            continue
-        suggested.add(key)
-        reasoning, status = check_against_best(reason, params, best, inputs)
-        result.suggestions.append(Suggestion(params, reasoning, status, reason))
-    if not result.suggestions and not result.rejected:
-        result.error = 'The LLM did not suggest any configurations.'
+            fill(f'LLM repeated trial {tried[key]}')
+        elif key in suggested:
+            fill(f'LLM repeated suggestion {suggested[key]}')
+        else:
+            suggested[key] = slot
+            reasoning, status = check_against_best(reason, params, best, inputs)
+            result.suggestions.append(Suggestion(params, reasoning, status, reason))
+
+    count = len(items)
+    while len(result.suggestions) < N_SUGGESTIONS:
+        fill('LLM was unavailable' if error and 'unavailable' in error
+             else 'LLM reply could not be used' if error
+             else f'LLM gave only {count} suggestion{"" if count == 1 else "s"}')
     return result
 
 

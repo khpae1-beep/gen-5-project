@@ -150,9 +150,13 @@ def try_suggestion(request, pk):
     if not trials:
         messages.error(request, 'Could not try that suggestion: the job has no trials.')
         return redirect('tuning:detail', pk=job.pk)
-    reasoning, status = recheck_reason(job, trials, params, config.get('llm_reason', ''))
+    if config.get('source') == 'random':  # A slot filled at random: no LLM reason to re-check.
+        proposal = Proposal(params, config['reasoning'], Trial.PROPOSED_BY_FALLBACK)
+    else:
+        reasoning, status = recheck_reason(job, trials, params, config.get('llm_reason', ''))
+        proposal = Proposal(params, reasoning, Trial.PROPOSED_BY_SUGGESTION, status)
     try:
-        trial, new_best = add_trial(job, Proposal(params, reasoning, Trial.PROPOSED_BY_SUGGESTION, status))
+        trial, new_best = add_trial(job, proposal)
     except TrialError as exc:
         messages.error(request, f'Could not try that suggestion: {exc}')
         return redirect('tuning:detail', pk=job.pk)

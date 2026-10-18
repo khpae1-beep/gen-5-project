@@ -77,7 +77,7 @@
       {% if suggestions.error %}<p class="empty">{{ suggestions.error }}</p>{% endif %}
       {% for config in suggestions.configs %}
         <div class="explanation" style="margin-top: 12px;">
-          <p style="margin-top: 0;"><strong>Suggestion {{ forloop.counter }}</strong>: <code>{{ config.params_text }}</code></p>
+          <p style="margin-top: 0;"><strong>Suggestion {{ forloop.counter }}</strong> <span class="muted">· {{ config.label|default:"LLM" }}</span>: <code>{{ config.params_text }}</code></p>
           <p>{{ config.reasoning }}</p>
           {% if config.tried_trial %}
             <p class="muted" style="margin-bottom: 0;">Tried as <a href="#trial-{{ config.tried_trial }}">trial {{ config.tried_trial }}</a>.</p>
