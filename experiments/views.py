@@ -7,6 +7,7 @@ from django.contrib import messages
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
+from .comparison import compare_runs
 from .models import Experiment, Run
 from .promotion import PromotionError, checkpoint_problem, current_promotion, promote
 from .versioning import format_value, metric_label
@@ -155,3 +156,32 @@ def promote_run(request, name, version):
             f'Promoted {run}. Restart publish_predictions to publish predictions from this version.',
         )
     return redirect('experiments:run', name=run.experiment.name, version=run.version)
+
+
+def parse_version(value, versions, default):
+    try:
+        version = int(value)
+    except (TypeError, ValueError):
+        return default
+    return version if version in versions else default
+
+
+def comparison_context(request_data, name):
+    """The compare page's context for versions a and b given in request_data (GET or POST)."""
+    experiment = get_object_or_404(Experiment, name=name)
+    versions = list(experiment.runs.order_by('version').values_list('version', flat=True))
+    context = {'experiment': experiment, 'versions': versions}
+    if len(versions) < 2:
+        return context
+
+    a = parse_version(request_data.get('a'), versions, versions[-2])
+    b = parse_version(request_data.get('b'), versions, versions[-1])
+    runs = {run.version: run for run in experiment.runs.filter(version__in={a, b})}
+    run_a, run_b = runs[a], runs[b]
+    run_a.experiment = run_b.experiment = experiment  # Saves a query per run in the template.
+    context.update({'run_a': run_a, 'run_b': run_b, 'comparison': compare_runs(run_a, run_b)})
+    return context
+
+
+def compare(request, name):
+    return render(request, 'experiments/compare.html', comparison_context(request.GET, name))

@@ -9,6 +9,7 @@
   <h1>{{ experiment.name }}</h1>
   <p class="muted">
     {{ rows|length }} run{{ rows|length|pluralize }}{% if promoted_version %} · <a class="badge" href="{% url 'experiments:run' experiment.name promoted_version %}">v{{ promoted_version }} promoted</a>{% endif %}
+    {% if rows|length > 1 %} · <a href="{% url 'experiments:compare' experiment.name %}">Compare versions</a>{% endif %}
     {% if experiment.description %}<br>{{ experiment.description }}{% endif %}
   </p>
 

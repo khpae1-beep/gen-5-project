@@ -57,6 +57,7 @@
   {% endif %}
 
   <h2>Changes from {% if run.parent %}<a href="{% url 'experiments:run' run.experiment.name run.parent.version %}">v{{ run.parent.version }}</a>{% else %}the previous version{% endif %}</h2>
+  {% if run.parent %}<p><a href="{% url 'experiments:compare' run.experiment.name %}?a={{ run.parent.version }}&amp;b={{ run.version }}">Compare v{{ run.parent.version }} and v{{ run.version }} side by side</a></p>{% endif %}
   {% if not run.parent %}
     <p class="muted">This is the first run, so there is nothing to compare with.</p>
   {% elif param_changes or metric_changes %}
