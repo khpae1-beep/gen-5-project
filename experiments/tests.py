@@ -12,7 +12,7 @@ from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.runnables import RunnableLambda
 
 from experiments import training
-from experiments.management.commands import promote_run
+from experiments import promotion
 from experiments.models import Experiment, Run
 from experiments.tracking import current_git_commit, log_run
 from experiments.versioning import fallback_note, format_value, write_version_note
@@ -283,7 +283,7 @@ class PromoteRunTests(TempDirTestCase):
         self.model_path = self.tmp / 'models' / 'heart_disease_model.joblib'
         self.info_path = self.tmp / 'models' / 'current_model.json'
         for name, value in (('PROMOTED_MODEL_PATH', self.model_path), ('CURRENT_MODEL_INFO_PATH', self.info_path)):
-            patcher = mock.patch.object(promote_run, name, value)
+            patcher = mock.patch.object(promotion, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
 

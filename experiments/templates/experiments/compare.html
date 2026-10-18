@@ -1,0 +1,69 @@
+{% extends 'base.html' %}
+
+{% block title %}Compare · {{ experiment.name }} · Experiments · AutoMLOps Suite{% endblock %}
+
+{% block content %}
+{% include 'experiments/_styles.html' %}
+<div class="exp">
+  <p class="crumbs"><a href="{% url 'experiments:list' %}">Experiments</a> / <a href="{% url 'experiments:detail' experiment.name %}">{{ experiment.name }}</a> /</p>
+  <h1>Compare versions</h1>
+
+  {% if not run_a %}
+    <p class="empty">Comparing needs at least two runs; {{ experiment.name }} has {{ versions|length }}.</p>
+  {% else %}
+    <form method="get" class="muted">
+      <label for="a">Compare</label>
+      <select id="a" name="a">{% for v in versions %}<option value="{{ v }}"{% if v == run_a.version %} selected{% endif %}>v{{ v }}</option>{% endfor %}</select>
+      <label for="b">with</label>
+      <select id="b" name="b">{% for v in versions %}<option value="{{ v }}"{% if v == run_b.version %} selected{% endif %}>v{{ v }}</option>{% endfor %}</select>
+      <button type="submit" class="secondary">Compare</button>
+    </form>
+    <form method="post" action="{% url 'experiments:explain' experiment.name %}" style="margin-top: 12px;">
+      {% csrf_token %}
+      <input type="hidden" name="a" value="{{ run_a.version }}">
+      <input type="hidden" name="b" value="{{ run_b.version }}">
+      <button type="submit">Explain the difference</button>
+      <span class="muted">Asks the LLM, then checks its answer against the numbers below.</span>
+    </form>
+    {% if explanation %}
+      <div class="explanation" style="margin-top: 12px;">
+        <p style="margin-top: 0;">{{ explanation.text }}</p>
+        <p class="muted" style="margin-bottom: 0;">{% if explanation.used_llm %}Written by the LLM and checked against the numbers.{% else %}Written from the numbers, because {{ explanation.reason }}.{% endif %}</p>
+      </div>
+    {% endif %}
+
+    <p class="muted">Highlighted rows differ. Changes are v{{ run_b.version }} minus v{{ run_a.version }}; for test accuracy, precision, recall and F1, green is better and red is worse.</p>
+
+    {% for title, rows in comparison.items %}
+      <h2>{% if title == 'params' %}Parameters{% else %}Metrics{% endif %}</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th class="num"><a href="{% url 'experiments:run' experiment.name run_a.version %}">v{{ run_a.version }}</a></th>
+              <th class="num"><a href="{% url 'experiments:run' experiment.name run_b.version %}">v{{ run_b.version }}</a></th>
+              <th class="num">Change</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in rows %}
+              <tr{% if row.differs %} class="changed"{% endif %}>
+                <td>{% if title == 'params' %}<code>{{ row.name }}</code>{% else %}{{ row.name }}{% endif %}</td>
+                <td class="num">{{ row.a }}</td>
+                <td class="num">{{ row.b }}</td>
+                <td class="num {{ row.direction }}">
+                  {% if row.delta is not None and row.differs %}{% if row.delta > 0 %}+{% endif %}{% if title == 'params' %}{{ row.delta|floatformat:"-3" }}{% else %}{{ row.delta|floatformat:3 }}{% endif %}
+                  {% elif row.differs %}changed{% else %}–{% endif %}
+                </td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="4" class="muted">None recorded.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endfor %}
+  {% endif %}
+</div>
+{% endblock %}
