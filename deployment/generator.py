@@ -11,22 +11,6 @@ from core.llm import get_llm
 SUPPORTED_PROVIDERS = ("aws", "gcp")
 
 
-def clean_terraform_code(code):
-    """Remove Markdown formatting from generated Terraform code."""
-    code = code.strip()
-
-    code = re.sub(
-        r"^```(?:terraform|hcl)?\s*\n",
-        "",
-        code,
-        flags=re.IGNORECASE,
-    )
-
-    code = re.sub(r"\n?```\s*$", "", code)
-
-    return code.strip()
-
-
 FENCED_BLOCK = re.compile(
     r"```[ \t]*([\w+-]*)[^\n]*\n(.*?)(?:```|\Z)",
     re.DOTALL,
