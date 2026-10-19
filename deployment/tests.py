@@ -104,3 +104,25 @@ class GenerateTerraformExtractionTests(SimpleTestCase):
         # The correction prompt gets the extracted code, not the chat text around it.
         self.assertIn(HCL, prompts[1])
         self.assertNotIn('Here is the Terraform configuration', prompts[1])
+
+    def test_on_attempt_reports_each_attempt_without_changing_the_output(self):
+        def run(**kwargs):
+            llm = mock.Mock()
+            llm.invoke.side_effect = [SimpleNamespace(content=HCL)] * 3
+            results = iter([(False, 'Error: one'), (False, 'Error: two'), (True, '')])
+
+            def fake_terraform(directory, command):
+                return next(results) if command[0] == 'validate' else (True, '')
+
+            with tempfile.TemporaryDirectory() as tmp, \
+                    mock.patch('deployment.generator.get_llm', return_value=llm), \
+                    mock.patch('deployment.generator.run_terraform', side_effect=fake_terraform), \
+                    mock.patch('builtins.print') as printed:
+                generate_terraform('aws', 'An S3 bucket.', output_dir=tmp, **kwargs)
+            return [call.args[0].replace(tmp, '<tmp>') for call in printed.call_args_list]
+
+        attempts = []
+        with_callback = run(on_attempt=attempts.append)
+        self.assertEqual(attempts, [1, 2, 3])
+        self.assertEqual(with_callback, run())
+        self.assertIn('Generating Terraform configuration (attempt 3)...', with_callback)
