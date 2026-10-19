@@ -4,7 +4,7 @@ Django project for the team's AutoMLOps Suite. The `config` project holds settin
 
 ## Setup
 
-Requires Python 3.10 and Docker.
+Requires Python 3.10, Docker and the Terraform CLI.
 
 1. Create and activate a virtual environment:
 
@@ -19,19 +19,28 @@ Requires Python 3.10 and Docker.
    pip install -r requirements.txt
    ```
 
-3. Copy the example environment file and edit values as needed:
+3. Install the Terraform CLI, which the deployment generator uses to format and validate the configuration it generates. On macOS:
+
+   ```bash
+   brew tap hashicorp/tap
+   brew install hashicorp/tap/terraform
+   ```
+
+   For other systems, see https://developer.hashicorp.com/terraform/install. Check it with `terraform -version`.
+
+4. Copy the example environment file and edit values as needed:
 
    ```bash
    cp .env.example .env
    ```
 
-4. Apply database migrations (SQLite):
+5. Apply database migrations (SQLite):
 
    ```bash
    python manage.py migrate
    ```
 
-5. Start RabbitMQ:
+6. Start RabbitMQ:
 
    ```bash
    docker compose up -d
@@ -39,7 +48,7 @@ Requires Python 3.10 and Docker.
 
    The management UI is at http://localhost:15672 (guest / guest).
 
-6. Run the development server:
+7. Run the development server:
 
    ```bash
    python manage.py runserver
