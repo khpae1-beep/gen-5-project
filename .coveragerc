@@ -1,0 +1,15 @@
+[run]
+source =
+    core
+    monitoring
+    experiments
+    tuning
+    deployment
+omit =
+    */migrations/*
+    */tests/*
+    */test*.py
+    .venv/*
+    .venv-*/*
+    */.venv/*
+    */.venv-*/*
