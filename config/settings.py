@@ -51,6 +51,7 @@ INSTALLED_APPS = [
     'monitoring',
     'experiments',
     'tuning',
+    'deployment',
 ]
 
 MIDDLEWARE = [

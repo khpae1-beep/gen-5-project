@@ -79,8 +79,14 @@ def generate_terraform(
     description,
     output_dir="generated",
     max_retries=3,
+    on_attempt=None,
 ):
-    """Generate and validate Terraform infrastructure code."""
+    """Generate and validate Terraform infrastructure code.
+
+    on_attempt, if given, is called with the attempt number (1, 2, ...) at the
+    start of each attempt, so callers such as the web page can report how many
+    attempts were needed.
+    """
 
     provider = provider.lower().strip()
 
@@ -137,6 +143,9 @@ Rules:
             f"Generating Terraform configuration "
             f"(attempt {attempt + 1})..."
         )
+
+        if on_attempt:
+            on_attempt(attempt + 1)
 
         response = llm.invoke(prompt)
 

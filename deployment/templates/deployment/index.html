@@ -1,0 +1,85 @@
+{% extends 'base.html' %}
+
+{% block title %}Deployments · AutoMLOps Suite{% endblock %}
+
+{% block content %}
+{% include 'experiments/_styles.html' %}
+<style>
+  .exp pre { background: #f5f7fa; border: 1px solid #d9e2ec; border-radius: 6px; padding: 12px 14px; overflow-x: auto; font-size: 0.85rem; line-height: 1.45; }
+  .exp pre code { background: none; padding: 0; }
+  .exp form.generate p { margin: 0 0 12px; }
+  .exp form.generate label { display: block; font-weight: 600; margin-bottom: 4px; }
+  .exp form.generate textarea { width: 100%; max-width: 640px; font: inherit; padding: 6px 8px; box-sizing: border-box; }
+  .exp .errorlist { color: #9b1c1c; margin: 4px 0; padding-left: 18px; }
+  .exp .result { border: 1px solid #d9e2ec; border-radius: 8px; padding: 12px 16px; margin-top: 12px; }
+  .exp .result.success { border-left: 4px solid #18794e; }
+  .exp .result.failed, .exp .result.error { border-left: 4px solid #c81e1e; }
+  .exp .status { font-weight: 600; }
+  .exp .status.success { color: #18794e; }
+  .exp .status.failed, .exp .status.error { color: #9b1c1c; }
+</style>
+<div class="exp">
+  <h1>Deployments</h1>
+  <p class="muted">Generate a Terraform configuration for AWS or GCP from a description. The LLM writes the HCL, and Terraform formats and validates it; if validation fails, the LLM is asked to fix the errors (up to 4 attempts in all). Review the configuration before deploying it.</p>
+
+  {% if not terraform_installed %}
+    <p class="messages"><span class="error" style="display: block; padding: 10px 14px; border-radius: 6px;">The Terraform CLI is not installed or not on the PATH, so generation is unavailable. See the README setup steps.</span></p>
+  {% endif %}
+
+  <h2>Generate a configuration</h2>
+  {% if user.is_active and user.is_staff %}
+    <form method="post" action="{% url 'deployment:generate' %}" class="generate"
+          onsubmit="const b = this.querySelector('button'); b.disabled = true; b.textContent = 'Generating… this can take a few minutes';">
+      {% csrf_token %}
+      {{ form.non_field_errors }}
+      <p>
+        <label for="{{ form.provider.id_for_label }}">Provider</label>
+        {{ form.provider }}
+        {{ form.provider.errors }}
+      </p>
+      <p>
+        <label for="{{ form.description.id_for_label }}">Description</label>
+        {{ form.description }}
+        <span class="muted">{{ form.description.help_text }}</span>
+        {{ form.description.errors }}
+      </p>
+      <button type="submit"{% if not terraform_installed %} disabled{% endif %}>Generate Terraform</button>
+      <span class="muted">Generation can take a few minutes, especially when Terraform finds errors and the LLM has to correct them.</span>
+    </form>
+  {% else %}
+    <p>
+      <button type="button" disabled>Generate Terraform</button>
+      <span class="muted">Only staff can generate configurations. <a href="{% url 'admin:login' %}?next={{ request.path|urlencode }}">Log in as a staff user at /admin/</a>. Generation can take a few minutes.</span>
+    </p>
+  {% endif %}
+
+  {% if result %}
+    <h2 id="result">Last result</h2>
+    <div class="result {{ result.status }}">
+      <p style="margin-top: 0;">
+        <span class="status {{ result.status }}">{% if result.status == 'success' %}Succeeded{% elif result.status == 'failed' %}Failed{% else %}Could not generate{% endif %}</span>
+        · {{ result.provider|upper }}{% if result.attempts %} · {{ result.attempts }} attempt{{ result.attempts|pluralize }}{% endif %}{% if result.seconds %} · {{ result.seconds }} s{% endif %}
+      </p>
+      <p>{{ result.message }}</p>
+      <p class="muted">Description: {{ result.description }}</p>
+      {% if result.error %}
+        <p><strong>Last Terraform error</strong></p>
+        <pre><code>{{ result.error }}</code></pre>
+      {% endif %}
+      {% if result.code %}
+        <p><strong>{% if result.status == 'success' %}Generated{% else %}Last generated{% endif %} main.tf</strong> <span class="muted">({{ result.path }})</span></p>
+        <pre><code>{{ result.code }}</code></pre>
+      {% endif %}
+    </div>
+  {% endif %}
+
+  <h2>Sample configurations</h2>
+  <p class="muted">Validated examples generated earlier, kept in the repository.</p>
+  {% for sample in samples %}
+    <h3>{{ sample.name }} <span class="muted" style="font-weight: normal; font-size: 0.9rem;">({{ sample.path }})</span></h3>
+    <pre><code>{{ sample.code }}</code></pre>
+  {% empty %}
+    <p class="muted">No sample configurations found.</p>
+  {% endfor %}
+</div>
+{% endblock %}
