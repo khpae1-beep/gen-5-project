@@ -11,6 +11,7 @@ from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.db import connection
+from django.template.base import Template
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
@@ -184,9 +185,27 @@ class RoutePerformanceTests(TestCase):
             mock.patch('experiments.training.train_and_evaluate', side_effect=external_call),
             mock.patch('socket.create_connection', side_effect=external_call),
         ]
+        original_template_render = Template.render
+        template_render_ms = []
+        render_depth = 0
+
+        def measure_template_render(template, context):
+            nonlocal render_depth
+            outermost = render_depth == 0
+            started = time.perf_counter()
+            render_depth += 1
+            try:
+                return original_template_render(template, context)
+            finally:
+                render_depth -= 1
+                if outermost:
+                    template_render_ms.append((time.perf_counter() - started) * 1000)
+
         with ExitStack() as stack:
             entered = [stack.enter_context(guard) for guard in guards]
+            stack.enter_context(mock.patch.object(Template, 'render', new=measure_template_render))
             benchmark_output = []
+            dashboard_query_profile = []
             for name, path, request, expected_status in self.benchmark_routes():
                 for _ in range(WARMUP_REQUESTS):
                     response = request()
@@ -194,19 +213,56 @@ class RoutePerformanceTests(TestCase):
 
                 latencies_ms = []
                 query_counts = []
+                database_times_ms = []
+                template_times_ms = []
                 for _ in range(MEASURED_REQUESTS):
-                    with CaptureQueriesContext(connection) as queries:
+                    render_start = len(template_render_ms)
+
+                    def time_query(execute, sql, params, many, context):
+                        started = time.perf_counter()
+                        try:
+                            return execute(sql, params, many, context)
+                        finally:
+                            query_durations.append((time.perf_counter() - started) * 1000)
+
+                    query_durations = []
+                    with CaptureQueriesContext(connection) as queries, connection.execute_wrapper(time_query):
                         started = time.perf_counter()
                         response = request()
                         latencies_ms.append((time.perf_counter() - started) * 1000)
                     self.assertEqual(response.status_code, expected_status, f'{name}: {path}')
                     query_counts.append(len(queries))
+                    self.assertEqual(len(query_durations), len(queries.captured_queries))
+                    database_times_ms.append(sum(query_durations))
+                    template_times_ms.append(sum(template_render_ms[render_start:]))
+                    if name == 'monitoring dashboard' and not dashboard_query_profile:
+                        self.assertEqual(len(queries), 4)
+                        self.assertEqual(response.context['model_names'], ['benchmark-model-a', 'benchmark-model-b'])
+                        self.assertEqual(response.context['model_name'], 'benchmark-model-a')
+                        self.assertEqual(response.context['total_predictions'], 30)
+                        self.assertEqual(response.context['window_count'], 5)
+                        self.assertEqual(response.context['anomaly_count'], 1)
+                        self.assertContains(
+                            response,
+                            '<option value="benchmark-model-a" selected>benchmark-model-a</option>',
+                            html=True,
+                        )
+                        dashboard_query_profile = [
+                            {
+                                'sql': ' '.join(query['sql'].split()),
+                                'database_execute_ms': round(duration, 3),
+                            }
+                            for query, duration in zip(queries.captured_queries, query_durations)
+                        ]
 
                 benchmark_output.append({
                     'route': f'{name} {path}',
                     'status': expected_status,
                     'median_ms': round(statistics.median(latencies_ms), 3),
                     'p95_ms': round(percentile_95(latencies_ms), 3),
+                    'template_median_ms': round(statistics.median(template_times_ms), 3),
+                    'database_execute_median_ms': round(statistics.median(database_times_ms), 6),
+                    'database_execute_max_ms': round(max(database_times_ms), 6),
                     'median_queries': statistics.median(query_counts),
                     'query_min': min(query_counts),
                     'query_max': max(query_counts),
@@ -225,5 +281,6 @@ class RoutePerformanceTests(TestCase):
             'warmups_per_route': WARMUP_REQUESTS,
             'measured_requests_per_route': MEASURED_REQUESTS,
             'p95_method': 'nearest rank',
+            'dashboard_query_profile': dashboard_query_profile,
             'results': benchmark_output,
         }, sort_keys=True))
