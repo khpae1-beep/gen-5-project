@@ -11,20 +11,44 @@ from core.llm import get_llm
 SUPPORTED_PROVIDERS = ("aws", "gcp")
 
 
-def clean_terraform_code(code):
-    """Remove Markdown formatting from generated Terraform code."""
-    code = code.strip()
+FENCED_BLOCK = re.compile(
+    r"```[ \t]*([\w+-]*)[^\n]*\n(.*?)(?:```|\Z)",
+    re.DOTALL,
+)
+TERRAFORM_LANGUAGES = ("terraform", "hcl", "tf")
+TERRAFORM_BLOCK_START = re.compile(
+    r"^\s*(?:terraform|provider|resource|variable|output|data|locals|module)\s*(?:\{|\")"
+)
 
-    code = re.sub(
-        r"^```(?:terraform|hcl)?\s*\n",
-        "",
-        code,
-        flags=re.IGNORECASE,
-    )
 
-    code = re.sub(r"\n?```\s*$", "", code)
+def extract_terraform_code(reply):
+    """Extract the Terraform code from an LLM reply.
 
-    return code.strip()
+    If the reply has fenced code blocks, return the terraform/hcl one (or the
+    first one). Otherwise drop any lines before the first line that starts a
+    Terraform block, such as chat text like "Here is the configuration:".
+    """
+    text = reply.replace("\r\n", "\n").strip()
+
+    blocks = [
+        (language.lower(), body)
+        for language, body in FENCED_BLOCK.findall(text)
+    ]
+
+    if blocks:
+        for language, body in blocks:
+            if language in TERRAFORM_LANGUAGES:
+                return body.strip()
+
+        return blocks[0][1].strip()
+
+    lines = text.splitlines()
+
+    for index, line in enumerate(lines):
+        if TERRAFORM_BLOCK_START.match(line):
+            return "\n".join(lines[index:]).strip()
+
+    return text
 
 
 def run_terraform(directory, command):
@@ -89,8 +113,7 @@ Infrastructure requirements:
 {description}
 
 Rules:
-- Return only valid Terraform HCL.
-- Do not include Markdown code fences.
+- Return only valid Terraform HCL. No markdown, no code fences, no explanation.
 - Include a terraform required_providers block.
 - Use the appropriate AWS or Google provider.
 - Declare every variable that is referenced.
@@ -124,7 +147,7 @@ Rules:
                 "LLM returned non-text content."
             )
 
-        terraform_code = clean_terraform_code(
+        terraform_code = extract_terraform_code(
             terraform_code
         )
 
@@ -203,9 +226,7 @@ Rules:
 - Preserve the original infrastructure requirements.
 - Declare all referenced variables.
 - Use current Terraform provider resource syntax.
-- Return only complete Terraform HCL.
-- Do not include Markdown code fences.
-- Do not include explanations.
+- Return only valid Terraform HCL. No markdown, no code fences, no explanation.
 """
 
     raise RuntimeError(
