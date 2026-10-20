@@ -23,8 +23,7 @@ Team **Gen 5**: Khaliyah S. Paen · Sandeep Shah · Tah Soh. Course project, Mor
 9. [Team and contributions](#8-team-and-contributions)
 10. [Live demo deployment](#9-live-demo-deployment)
 11. [Limitations and future work](#10-limitations-and-future-work)
-12. [Use of AI tools](#11-use-of-ai-tools)
-13. [References](#12-references)
+12. [References](#12-references)
 
 ---
 
