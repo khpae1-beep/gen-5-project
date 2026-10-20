@@ -62,13 +62,35 @@ See `.env.example` for the full list:
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `SECRET_KEY` | Django secret key | insecure dev key |
-| `DEBUG` | Debug mode; also enables the debug toolbar | `True` |
+| `DJANGO_SECRET_KEY` | Django secret key (the older name `SECRET_KEY` also works) | insecure dev key |
+| `DJANGO_DEBUG` | Debug mode; also enables the debug toolbar (the older name `DEBUG` also works) | `True` |
+| `DJANGO_ALLOWED_HOSTS` | Comma-separated host names the site answers to | `localhost,127.0.0.1` |
+| `DJANGO_CSRF_TRUSTED_ORIGINS` | Comma-separated origins allowed to submit forms, e.g. `https://example.com` | none |
+| `DB_PATH` | Path of the SQLite database | `db.sqlite3` in the project |
 | `RABBITMQ_HOST` | RabbitMQ host | `localhost` |
 | `LLM_PROVIDER` | `openai` or `ollama`, used by `core.llm.get_llm()` | `ollama` |
 | `LLM_MODEL` | Model name for the chosen provider | `llama3.2` / `gpt-4o-mini` |
 | `OPENAI_API_KEY` | Required when `LLM_PROVIDER=openai` | none |
 | `OLLAMA_BASE_URL` | Ollama server URL | `http://localhost:11434` |
+
+## Demo deployment (Render)
+
+The site can run as a free, read-only demo on [Render](https://render.com) with the data in `demo/demo.sqlite3`: a copy of a development database with all users, sessions and admin log entries removed. Nobody can log in, so the staff-only buttons (promote, suggest, generate) are disabled, and every page works without Ollama, RabbitMQ or Terraform.
+
+Create a Python web service from this repository with:
+
+- **Build command:** `pip install -r requirements.txt && python manage.py collectstatic --noinput`
+- **Start command:** `bin/render_start.sh`
+- **Environment:** `DJANGO_DEBUG=False`, a long random `DJANGO_SECRET_KEY`, and `DB_PATH=/tmp/demo.sqlite3`
+
+`bin/render_start.sh` copies the demo database to `DB_PATH` on every start (so the demo resets when the service restarts), runs `migrate`, and starts gunicorn on Render's `$PORT`. Render's own hostname is added to the allowed hosts automatically; set `DJANGO_ALLOWED_HOSTS` and `DJANGO_CSRF_TRUSTED_ORIGINS` for a custom domain. To try the same setup locally:
+
+```bash
+DJANGO_DEBUG=False python manage.py collectstatic --noinput
+DB_PATH=/tmp/demo.sqlite3 PORT=8000 DJANGO_DEBUG=False bin/render_start.sh
+```
+
+The script refuses to run without `DB_PATH`, so it never overwrites your own `db.sqlite3`.
 
 ## Monitoring
 

@@ -1,6 +1,7 @@
 Django==4.2.30
 coverage==7.16.2
 django-debug-toolbar==6.3.0
+gunicorn==26.2.0
 joblib==1.6.0
 langchain==1.4.6
 langchain-ollama==1.1.0
@@ -10,3 +11,4 @@ pandas==2.3.3
 pika==1.4.4
 python-dotenv==1.2.4
 scikit-learn==1.7.2
+whitenoise==6.12.0
