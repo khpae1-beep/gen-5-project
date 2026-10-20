@@ -5,3 +5,7 @@ __pycache__/
 *.pyc
 models/
 generated/
+
+.venv-python314-backup/
+.coverage
+htmlcov/
