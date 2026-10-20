@@ -1,0 +1,18 @@
+{
+  "experiment": "heart-disease-rf",
+  "version": 2,
+  "run_id": 5,
+  "checkpoint_path": "models/runs/heart-disease-rf-v2.joblib",
+  "version_note": "v2: n_estimators 100→300, max_depth None→8; test accuracy 0.754→0.77, test precision 0.765→0.788, test f1 0.776→0.788",
+  "metrics": {
+    "train_accuracy": 1.0,
+    "train_precision": 1.0,
+    "train_recall": 1.0,
+    "train_f1": 1.0,
+    "test_accuracy": 0.7704918032786885,
+    "test_precision": 0.7878787878787878,
+    "test_recall": 0.7878787878787878,
+    "test_f1": 0.7878787878787878
+  },
+  "promoted_at": "2026-10-17T19:35:39.269444+00:00"
+}
