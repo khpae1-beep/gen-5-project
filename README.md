@@ -367,7 +367,7 @@ On Render, the service's own host name (`RENDER_EXTERNAL_HOSTNAME`, set by Rende
 ```bash
 # Step 1: baseline pipeline
 python ml/preprocesss.py
-python ml/train_model.py
+python ml/train_model.py      # overwrites models/heart_disease_model.joblib: run promote_run again afterwards
 python ml/evaluate_model.py
 
 # Step 2: AI-powered deployment
