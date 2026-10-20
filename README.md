@@ -498,13 +498,8 @@ The snapshot contains real project data (experiments, tuning jobs, predictions a
 
 ---
 
-## 11. Use of AI tools
 
-We used AI coding assistants (Claude Code and GitHub Copilot) to help write and review code, tests and documentation. Commits made with Claude Code carry a `Co-Authored-By: Claude` trailer. Team members designed the features, reviewed and tested every change, and are responsible for the results reported here. The LLM inside the application (Ollama `llama3.1:8b` through LangChain) is a component of the system, as described in section 4.7.
-
----
-
-## 12. References
+## 11. References
 
 1. D. Lapp, *Heart Disease Dataset*, Kaggle. https://www.kaggle.com/datasets/johnsmith88/heart-disease-dataset
 2. A. Janosi, W. Steinbrunn, M. Pfisterer, R. Detrano, *Heart Disease*, UCI Machine Learning Repository, 1988. https://archive.ics.uci.edu/dataset/45/heart+disease
