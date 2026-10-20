@@ -22,7 +22,7 @@ from sklearn.metrics import (
 # Step 1: Define project paths
 project_dir = Path(__file__).resolve().parent.parent
 
-data_path = project_dir / "data" / "heart.csv"
+data_path = Path(__file__).resolve().parent / "data" / "heart.csv"
 model_path = project_dir / "models" / "heart_disease_model.joblib"
 assets_dir = project_dir / "assets"
 

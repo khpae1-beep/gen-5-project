@@ -1,293 +1,517 @@
 # AutoMLOps Suite
 
-Django project for the team's AutoMLOps Suite. The `config` project holds settings and URLs; the `core` app serves the home page and shared helpers such as `core/llm.py`. Each teammate adds their own app (deployments, monitoring, experiments, tuning).
+**An AI-assisted MLOps platform built with Django, LangChain and Python.** It covers the full machine learning lifecycle: deployment, monitoring, experiment tracking, hyperparameter tuning and testing. The lifecycle is demonstrated on a heart-disease classifier.
 
-## Setup
+Team **Gen 5**: Khaliyah S. Paen · Sandeep Shah · Tah Soh. Course project, Morgan State University, Fall 2026.
 
-Requires Python 3.10, Docker and the Terraform CLI.
+**Live demo:** [gen-5-project.onrender.com](https://gen-5-project.onrender.com). This is a read-only snapshot of real project data. The free host sleeps when idle, so the first visit can take about a minute to load.
 
-1. Create and activate a virtual environment:
+![AutoMLOps Suite demo](docs/demo.gif)
 
-   ```bash
-   python3.10 -m venv .venv
-   source .venv/bin/activate
-   ```
+---
 
-2. Install dependencies:
+## Table of contents
 
-   ```bash
-   pip install -r requirements.txt
-   ```
+1. [Abstract](#abstract)
+2. [Problem statement and objectives](#1-problem-statement-and-objectives)
+3. [System architecture](#2-system-architecture)
+4. [Dataset](#3-dataset)
+5. [Methodology (assignment steps 1–6)](#4-methodology-assignment-steps-16)
+6. [Results and evaluation metrics](#5-results-and-evaluation-metrics)
+7. [Installation and usage](#6-installation-and-usage)
+8. [Repository structure](#7-repository-structure)
+9. [Team and contributions](#8-team-and-contributions)
+10. [Live demo deployment](#9-live-demo-deployment)
+11. [Limitations and future work](#10-limitations-and-future-work)
+12. [Use of AI tools](#11-use-of-ai-tools)
+13. [References](#12-references)
 
-3. Install the Terraform CLI, which the deployment generator uses to format and validate the configuration it generates. On macOS:
+---
 
-   ```bash
-   brew tap hashicorp/tap
-   brew install hashicorp/tap/terraform
-   ```
+## Abstract
 
-   For other systems, see https://developer.hashicorp.com/terraform/install. Check it with `terraform -version`.
+Most machine learning projects end at a single accuracy score. Production systems also need repeatable training, versioned models, monitoring of live predictions, systematic tuning and safe deployment. AutoMLOps Suite implements these stages in one Django application. A large language model (LLM) assists every stage through LangChain:
 
-4. Copy the example environment file and edit values as needed:
+- writing Terraform deployment configurations,
+- summarising monitoring windows,
+- describing changes between model versions,
+- proposing hyperparameters.
 
-   ```bash
-   cp .env.example .env
-   ```
+LLM output is never trusted directly. Every response is validated, either by the Terraform validator or by a fact check against the computed metrics, and a deterministic fallback takes over when the check fails.
 
-5. Apply database migrations (SQLite):
+On the Kaggle heart-disease data (302 unique records after removing duplicates), the baseline random forest reached **0.754** test accuracy. Tracked experiments improved this to **0.770**, and that version was promoted. Monitoring on held-out data reports about **0.80** accuracy and flags windows with simulated drift. LLM-guided tuning **tied** random search, with both reaching **0.8504** cross-validation accuracy in 15 trials. The suite has **204 automated tests** with **94% code coverage**.
 
-   ```bash
-   python manage.py migrate
-   ```
+---
 
-6. Start RabbitMQ:
+## 1. Problem statement and objectives
 
-   ```bash
-   docker compose up -d
-   ```
+The assignment asks for an "AutoMLOps Suite" that automates and supports the main operational stages of a machine learning model with AI assistance. We organised the work around the assignment's six steps:
 
-   The management UI is at http://localhost:15672 (guest / guest).
+| Step | Objective | Implementation | Owner |
+|---|---|---|---|
+| 1. Setup and environment | Reproducible project, data pipeline and baseline model | `config/`, `core/`, `ml/`, `docker-compose.yml` | Khaliyah (pipeline), Sandeep (Django base) |
+| 2. AI-powered model deployment | Generate validated cloud infrastructure for the model | `deployment/` (CLI and `/deployments/` page) | Khaliyah (generator), Sandeep (page, output fix) |
+| 3. Intelligent model monitoring | Stream predictions, detect degradation, explain it | `monitoring/` (RabbitMQ pipeline and `/monitoring/`) | Sandeep |
+| 4. Integrated experiment tracking | Version every training run, compare and promote | `experiments/` (`/experiments/`) | Sandeep |
+| 5. Automated hyperparameter tuning | LLM-guided search compared with a random baseline | `tuning/` (`/tuning/`) | Sandeep (originally assigned to Tah) |
+| 6. Testing and optimization | Verify the whole suite and measure performance | `core/test_*.py`, `experiments/test_lifecycle.py`, `docs/TESTING.md` | Tah |
 
-7. Run the development server:
+---
 
-   ```bash
-   python manage.py runserver
-   ```
+## 2. System architecture
 
-   Open http://127.0.0.1:8000/. With `DEBUG=True` the Django debug toolbar appears on the right.
+```mermaid
+flowchart TB
+    U["Browser"] --> WEB
 
-## Environment variables
+    subgraph WEB["Django web app"]
+        direction LR
+        DEP["Deployments"]
+        MON["Monitoring"]
+        EXP["Experiments"]
+        TUN["Tuning"]
+    end
 
-See `.env.example` for the full list:
+    WEB -->|"summaries, notes, proposals"| LLM["LangChain + Ollama<br/>llama3.1:8b"]
+    WEB -->|"runs, jobs, metrics"| DB[("SQLite")]
+    DEP -->|"fmt + validate"| TF["Terraform CLI"]
+    EXP -->|"checkpoints"| ART[("models/<br/>joblib files")]
+    ML["ml/ pipeline<br/>scikit-learn"] -->|"baseline model"| ART
 
-| Variable | Purpose | Default |
-| --- | --- | --- |
-| `DJANGO_SECRET_KEY` | Django secret key (the older name `SECRET_KEY` also works) | insecure dev key |
-| `DJANGO_DEBUG` | Debug mode; also enables the debug toolbar (the older name `DEBUG` also works) | `True` |
-| `DJANGO_ALLOWED_HOSTS` | Comma-separated host names the site answers to | `localhost,127.0.0.1` |
-| `DJANGO_CSRF_TRUSTED_ORIGINS` | Comma-separated origins allowed to submit forms, e.g. `https://example.com` | none |
-| `DB_PATH` | Path of the SQLite database | `db.sqlite3` in the project |
-| `RABBITMQ_HOST` | RabbitMQ host | `localhost` |
-| `LLM_PROVIDER` | `openai` or `ollama`, used by `core.llm.get_llm()` | `ollama` |
-| `LLM_MODEL` | Model name for the chosen provider | `llama3.2` / `gpt-4o-mini` |
-| `OPENAI_API_KEY` | Required when `LLM_PROVIDER=openai` | none |
-| `OLLAMA_BASE_URL` | Ollama server URL | `http://localhost:11434` |
+    PUB["publish_predictions"] -->|"JSON messages"| MQ[("RabbitMQ<br/>predictions queue")]
+    MQ --> CON["consume_predictions"]
+    CON -->|"PredictionLog"| DB
+```
 
-## Demo deployment (Render)
+| Layer | Technology |
+|---|---|
+| Web framework | Django 4.2 (apps: `core`, `deployment`, `monitoring`, `experiments`, `tuning`) |
+| Machine learning | scikit-learn (Pipeline: median imputation, standard scaling, random forest), pandas, joblib |
+| LLM integration | LangChain with Ollama (local `llama3.1:8b`), or OpenAI (`gpt-4o-mini`) through `core/llm.py` |
+| Messaging | RabbitMQ 3 (Docker, management UI on port 15672), `pika` client |
+| Infrastructure as code | Terraform CLI for formatting and validating generated AWS and GCP configs |
+| Storage | SQLite (runs, metrics, jobs, predictions); model files in `models/` |
+| Testing | Django test runner, `coverage`, custom `benchmark` command |
+| Demo hosting | Render (gunicorn and WhiteNoise, read-only snapshot) |
 
-The site can run as a free, read-only demo on [Render](https://render.com) with the data in `demo/demo.sqlite3`: a copy of a development database with all users, sessions and admin log entries removed. Nobody can log in, so the staff-only buttons (promote, suggest, generate) are disabled, and every page works without Ollama, RabbitMQ or Terraform.
+The model lifecycle the suite supports:
 
-Create a Python web service from this repository with:
+```mermaid
+flowchart LR
+    A["Data<br/>heart.csv"] --> B["Train<br/>train_experiment"]
+    B --> C["Track and compare<br/>v1, v2, v3"]
+    C --> D["Promote<br/>promote_run"]
+    D --> E["Serve and monitor<br/>RabbitMQ to dashboard"]
+    E -->|"drift flagged"| F["Tune<br/>run_tuning"]
+    F --> B
+    D --> G["Deploy<br/>Terraform generator"]
+```
 
-- **Build command:** `pip install -r requirements.txt && python manage.py collectstatic --noinput`
-- **Start command:** `bin/render_start.sh`
-- **Environment:** `DJANGO_DEBUG=False`, a long random `DJANGO_SECRET_KEY`, and `DB_PATH=/tmp/demo.sqlite3`
+---
 
-`bin/render_start.sh` copies the demo database to `DB_PATH` on every start (so the demo resets when the service restarts), runs `migrate`, and starts gunicorn on Render's `$PORT`. Render's own hostname is added to the allowed hosts automatically; set `DJANGO_ALLOWED_HOSTS` and `DJANGO_CSRF_TRUSTED_ORIGINS` for a custom domain. To try the same setup locally:
+## 3. Dataset
+
+| Property | Value |
+|---|---|
+| Source | [Heart Disease Dataset](https://www.kaggle.com/datasets/johnsmith88/heart-disease-dataset) (Kaggle, D. Lapp), derived from the UCI Heart Disease databases (Cleveland, Hungary, Switzerland, Long Beach V) |
+| File in repo | `ml/data/heart.csv` |
+| Rows | 1,025 |
+| Duplicate rows removed | 723 (70.5%) |
+| Unique rows used | 302 |
+| Columns | 13 features and 1 binary label (`target`) |
+| Missing values | None |
+| Class balance (unique rows) | 164 positive, 138 negative |
+| Split | Stratified 80/20, `random_state=42`: 241 training rows, 61 test rows |
+
+| Feature | Meaning |
+|---|---|
+| `age` | Age in years |
+| `sex` | 1 = male, 0 = female |
+| `cp` | Chest pain type (0–3) |
+| `trestbps` | Resting blood pressure (mm Hg) |
+| `chol` | Serum cholesterol (mg/dl) |
+| `fbs` | Fasting blood sugar above 120 mg/dl (1 = true) |
+| `restecg` | Resting electrocardiogram result (0–2) |
+| `thalach` | Maximum heart rate achieved |
+| `exang` | Exercise-induced angina (1 = yes) |
+| `oldpeak` | ST depression induced by exercise relative to rest |
+| `slope` | Slope of the peak exercise ST segment |
+| `ca` | Number of major vessels coloured by fluoroscopy |
+| `thal` | Thalassemia (encoded category) |
+
+**Preprocessing** (`ml/preprocesss.py`, `ml/train_model.py`): load the CSV, drop duplicate records, separate features from `target`, then split with stratification. Median imputation and standard scaling sit inside the scikit-learn `Pipeline`, so they are fitted on training rows only.
+
+**Why the duplicates matter:** without deduplication, copies of test rows also appear in training, which inflates accuracy. Every result below uses the 302 unique rows.
+
+> The model is a teaching example. It supports research and decision-making demonstrations and is not a medical diagnostic tool.
+
+---
+
+## 4. Methodology (assignment steps 1–6)
+
+### 4.1 Step 1: Setup and environment
+
+- **Django project:** `config/` holds settings, which are loaded from `.env`, and URLs. `core/` provides the home page, shared templates and `core/llm.py`.
+- **`get_llm()`:** one function returns a LangChain chat model for either provider (`LLM_PROVIDER=ollama` or `openai`), so no other app depends on a specific vendor.
+- **RabbitMQ:** `docker-compose.yml` starts `rabbitmq:3-management` (ports 5672 and 15672).
+- **Baseline pipeline:** in `ml/`, `train_model.py`, `evaluate_model.py` and `generate_graphs.py` produce the baseline model, its metrics (`assets/evaluation_results.json`), a confusion matrix and a feature-importance chart.
+- **Dependencies:** pinned in `requirements.txt`.
+
+### 4.2 Step 2: AI-powered model deployment
+
+The user describes the infrastructure in plain English and chooses AWS or GCP. The LLM drafts Terraform, and the Terraform CLI formats and validates it. Validation errors go back to the LLM for correction, up to 4 attempts. The tool **generates configuration only**; it does not apply it to a cloud account.
+
+```mermaid
+flowchart TD
+    A["Description and provider<br/>(CLI or /deployments/)"] --> B["LLM drafts Terraform"]
+    B --> C["Extract code from reply<br/>(drop chat text and markdown fences)"]
+    C --> D["terraform fmt + validate"]
+    D -->|"valid"| E["Save main.tf and show it"]
+    D -->|"errors, attempt < 4"| F["Send errors back to LLM"]
+    F --> B
+    D -->|"errors, attempt = 4"| G["Report last error"]
+```
+
+- **CLI:** `python -m deployment.cli --provider aws --description "..." --output generated/test`
+- **Web:** `/deployments/` shows the result, attempts, time taken, the generated `main.tf` and the sample configs in `generated/aws/` and `generated/gcp/`. Only staff can generate.
+- **Engineering finding:** the local model wrapped its answer in chat text and markdown fences, so the first version failed validation on all 4 attempts. Adding `extract_terraform_code()` fixed this (see results).
+
+### 4.3 Step 3: Intelligent model monitoring
+
+```mermaid
+sequenceDiagram
+    participant P as publish_predictions
+    participant Q as RabbitMQ (predictions)
+    participant C as consume_predictions
+    participant DB as SQLite
+    participant M as compute_metrics
+    participant L as LLM + fact check
+    participant D as /monitoring/
+    P->>Q: prediction, label, latency, model version
+    Q->>C: message
+    C->>DB: PredictionLog row
+    M->>DB: read predictions in windows of 10
+    M->>DB: MetricSnapshot (accuracy, latency, anomaly flags)
+    M->>L: facts for the latest windows
+    L-->>M: summary (kept only if every number matches)
+    D->>DB: charts, flagged windows, summary, recent predictions
+```
+
+- Predictions use **held-out test rows only**. An early version sampled training rows and reported 94%, a misleading figure caused by data leakage.
+- **Accuracy anomaly:** window accuracy more than 0.10 below the 0.75 baseline.
+- **Latency anomaly:** window latency more than double the earlier median.
+- `--drift` flips each prediction with 40% probability in the second half of the run, simulating a model that has started to degrade. The dashboard should then flag those windows.
+- **LLM summaries:** the model runs at temperature 0, code writes the opening sentence, and a fact check compares every number in the summary with the computed metrics. If the check fails, a summary written by code is shown instead.
+
+### 4.4 Step 4: Integrated experiment tracking
+
+```mermaid
+flowchart LR
+    R1["v1<br/>100 trees<br/>test 0.754"] --> R2["v2<br/>300 trees, depth 8<br/>test 0.770"]
+    R2 --> R3["v3<br/>200 trees, depth 5<br/>test 0.770"]
+    R2 -.->|"promote_run"| P["current_model.json<br/>live model = v2"]
+```
+
+- Every run is stored as a numbered version with its parameters, training and test metrics, the parent version, the changes from the parent, a SHA-256 hash of the data, the git commit and the checkpoint path.
+- The LLM writes a version note describing the change. A guard rejects notes that contradict the recorded parameters.
+- Pages: experiment list, run detail, side-by-side compare with **Explain the difference** (with a fallback written by code), and **Promote** (staff only). Promote works like a `git checkout`: it writes `models/current_model.json`, and monitoring reads that file.
+- `log_run()` in `experiments/tracking.py` is the shared logging API. Tuning trials are logged through it.
+
+### 4.5 Step 5: Automated hyperparameter tuning
+
+```mermaid
+flowchart TD
+    H["Trial history"] --> P{"Strategy"}
+    P -->|"llm"| L["LLM proposes settings and a reason"]
+    P -->|"random"| R["Seeded random sample"]
+    L --> V["Validate against the search space<br/>(invalid or repeated: seeded random fallback)"]
+    R --> S
+    V --> S["Score: 5-fold CV on training rows"]
+    S --> F["Fact-check the LLM's reason"]
+    F --> T["Log trial and run"]
+    T --> H
+```
+
+- **Search space:** random forest parameters `n_estimators` (50–500), `max_depth`, `min_samples_split`, `min_samples_leaf` and `max_features`.
+- **Selection** uses only cross-validation accuracy on training rows. Test accuracy is shown for reference and never used to choose settings.
+- Random fallbacks use their own seeded stream, so jobs are reproducible.
+- **Web:** `/tuning/` (jobs), `/tuning/<id>/` (trials), `/tuning/compare/` (LLM against random). **Suggest next experiments** asks the LLM for 3 new configurations; repeated or invalid ones are replaced and labelled. **Try this** runs one more trial.
+
+### 4.6 Step 6: Testing and optimization
+
+- **Unit and view tests** for every app, with the LLM, RabbitMQ and Terraform mocked.
+- **Smoke tests** (`core/test_smoke.py`) open the main pages, both logged out and as staff.
+- **Integration tests** (`experiments/test_lifecycle.py`): training registers versioned runs that the compare page reads; prediction messages are stored and turned into dashboard metrics; a deployment result is saved and shown (generator mocked).
+- **Demo tests** (`core/test_demo.py`) check that every page returns 200 with `DEBUG=False` and every external service unavailable.
+- **Benchmark:** `python manage.py benchmark` measures response time and SQL query counts per page (`core/test_performance.py`, `docs/benchmarks/`).
+- **Optimization review:** the dashboard uses 4 queries, each serving separate data, and no N+1 pattern was found. No code was changed for speed, and no before/after claim is made. Details are in [`docs/TESTING.md`](docs/TESTING.md).
+
+### 4.7 How LLM output is kept honest
+
+| Where the LLM is used | Check applied | Fallback |
+|---|---|---|
+| Terraform generation | `terraform validate`, up to 4 attempts | Last error and last generated `main.tf` shown |
+| Monitoring summary | Every number compared with computed metrics | Summary written by code |
+| Version notes and compare explanation | Compared with the recorded parameters and metrics | Text written from the numbers |
+| Tuning proposals | Search-space validation and repeat detection | Seeded random configuration, labelled |
+| Tuning reasons | Fact check against the previous trial (the best trial for suggestions) | Reason replaced and flagged |
+
+---
+
+## 5. Results and evaluation metrics
+
+All numbers were measured by the team on the 302-row deduplicated dataset.
+
+### 5.1 Model performance (test set, 61 rows)
+
+| Version | Settings | Train accuracy | Test accuracy | Test precision | Test recall | Test F1 | Train–test gap |
+|---|---|---:|---:|---:|---:|---:|---:|
+| v1 (baseline) | 100 trees, no depth limit | 1.000 | 0.754 | 0.765 | 0.788 | 0.776 | 0.246 |
+| **v2 (promoted)** | 300 trees, max depth 8 | 1.000 | **0.770** | 0.788 | 0.788 | 0.788 | 0.230 |
+| v3 | 200 trees, max depth 5 | 0.950 | 0.770 | 0.788 | 0.788 | 0.788 | 0.180 |
+
+v1 overfits, scoring perfectly on training data. v2 improved test accuracy and was promoted. v3 matched v2 with less overfitting.
+
+### 5.2 Monitoring
+
+| Run | Predictions | Windows | Flagged windows | Overall accuracy | Average latency |
+|---|---:|---:|---:|---:|---:|
+| Held-out rows, no drift | 150 | 15 | 2 | 0.81 | 9.3 ms |
+| Held-out rows, then `--drift` | 300 | 30 | 4 | 0.79 | 6.7 ms |
+| Early version (training rows, leaked) | n/a | n/a | n/a | 0.94 (invalid) | n/a |
+
+### 5.3 Hyperparameter tuning (15 trials each, 5-fold CV)
+
+| Strategy | Best CV accuracy | Found at trial | Test accuracy of best (reference) | Notes |
+|---|---:|---:|---:|---|
+| LLM-guided (llama3.1:8b) | 0.8504 ± 0.0640 | 2 | 0.7705 | 14 LLM proposals, 1 random fallback; 8 of 14 reasons failed the fact check; 108 s |
+| Random search (seeded) | 0.8504 ± 0.0598 | 3 | 0.7869 | Much faster: 15 trials in about 10.5 s |
+
+**Finding:** on this small dataset the search space is flat (most settings score 0.82–0.85), so the LLM gave no advantage over random search. We report this as measured and do not claim the speed-ups suggested in the assignment brief.
+
+### 5.4 AI-powered deployment
+
+| Version | Valid configurations | Detail |
+|---|---|---|
+| Before the output fix | 0 of 4 attempts | LLM reply included chat text and markdown fences |
+| After the fix (CLI) | Valid on attempt 3 | Attempts 1–2 had real Terraform errors that the LLM corrected |
+| After the fix (web page) | Valid on attempt 1 | 52.9 s, prompt "Serve the heart disease model as a REST API on one small server" |
+| Saved samples | AWS and GCP both valid | `generated/aws/main.tf`, `generated/gcp/main.tf` |
+
+### 5.5 Testing and performance
+
+| Metric | Value |
+|---|---|
+| Automated tests | 204, all passing |
+| Code coverage | 94% (1,995 statements, 111 not covered) |
+| Full test run | About 25 s on a MacBook Air |
+| Page response time | 0.6–5.4 ms median per page; monitoring dashboard about 6 ms median, 11 ms p95 (Django test client, SQLite; `docs/benchmarks/`, `docs/TESTING.md`) |
+| Database queries on the dashboard | 4 per request, no N+1 pattern |
+
+### 5.6 Discussion
+
+- **Honest evaluation changed the results.** Removing duplicate rows, and keeping monitoring on held-out data, lowered headline numbers (94% → about 80%) but made them trustworthy.
+- **LLMs helped most as assistants with a validator.** Terraform validation and numeric fact checks turned unreliable LLM output into dependable features.
+- **LLM-guided tuning did not beat random search** on 302 rows. A larger dataset with a less flat search space is needed to test that claim fairly.
+
+---
+
+## 6. Installation and usage
+
+### 6.1 Prerequisites
+
+| Tool | Purpose | Install (macOS) |
+|---|---|---|
+| Python 3.10+ | Runtime (tested on 3.10 and 3.12) | `brew install python@3.10` |
+| Docker Desktop | RabbitMQ for monitoring | [docker.com](https://www.docker.com/products/docker-desktop/) |
+| Ollama | Local LLM | `brew install ollama`, then `ollama pull llama3.1:8b` |
+| Terraform CLI | Validating generated deployment configs | `brew tap hashicorp/tap && brew install hashicorp/tap/terraform` |
+| Git | Version control | `xcode-select --install` |
+
+Without Ollama the suite still runs: every LLM feature falls back to text written by code.
+
+### 6.2 Setup
 
 ```bash
-DJANGO_DEBUG=False python manage.py collectstatic --noinput
-DB_PATH=/tmp/demo.sqlite3 PORT=8000 DJANGO_DEBUG=False bin/render_start.sh
+git clone https://github.com/khpae1-beep/gen-5-project.git
+cd gen-5-project
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env            # then edit LLM settings if needed
+python manage.py migrate
+python manage.py createsuperuser   # needed for staff-only buttons
+docker compose up -d               # RabbitMQ
+python manage.py runserver         # http://127.0.0.1:8000
 ```
 
-The script refuses to run without `DB_PATH`, so it never overwrites your own `db.sqlite3`.
+### 6.3 Environment variables
 
-## Monitoring
+| Variable | Default | Purpose |
+|---|---|---|
+| `LLM_PROVIDER` | `ollama` | `ollama` or `openai` |
+| `LLM_MODEL` | `llama3.2` for Ollama, `gpt-4o-mini` for OpenAI (we use `llama3.1:8b`) | Model name for the provider |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
+| `OPENAI_API_KEY` | (none) | Only when `LLM_PROVIDER=openai` |
+| `RABBITMQ_HOST` | `localhost` | RabbitMQ host |
+| `DJANGO_DEBUG` | `True` | Set `False` in production; also turns off the debug toolbar. The older name `DEBUG` also works |
+| `DJANGO_SECRET_KEY` | development key | Set a long random value in production. The older name `SECRET_KEY` also works |
+| `DJANGO_ALLOWED_HOSTS` | `localhost,127.0.0.1` | Comma-separated host names |
+| `DJANGO_CSRF_TRUSTED_ORIGINS` | (none) | Comma-separated origins allowed to submit forms, e.g. `https://example.com` |
+| `DB_PATH` | `db.sqlite3` in the project folder | SQLite file location |
 
-The `monitoring` app logs model predictions sent through RabbitMQ, groups them into windows, flags anomalies and shows them on a dashboard.
+On Render, the service's own host name (`RENDER_EXTERNAL_HOSTNAME`, set by Render) is added to the allowed hosts and trusted origins automatically.
 
-1. Start RabbitMQ and apply migrations:
-
-   ```bash
-   docker compose up -d
-   python manage.py migrate
-   ```
-
-2. In one terminal, start the consumer. It saves each message from the `predictions` queue as a `PredictionLog` row; stop it with Ctrl+C:
-
-   ```bash
-   python manage.py consume_predictions
-   ```
-
-3. In another terminal, publish predictions:
-
-   ```bash
-   python manage.py publish_predictions --count 100
-   python manage.py publish_predictions --count 100 --drift
-   ```
-
-   | Option | Effect |
-   | --- | --- |
-   | `--count N` | Number of predictions (default 100). |
-   | `--drift` | Accuracy drops halfway through the run. |
-   | `--delay 0.5` | Seconds to wait between messages. |
-   | `--data path.csv` | Predict on this CSV instead of the first of `ml/data/heart.csv`, `data/heart.csv` or `heart.csv`. A missing CSV or model is then an error. |
-   | `--all-rows` | Sample every row of the CSV instead of only the held-out test rows (see below). |
-
-4. Compute metrics, then open the dashboard at http://127.0.0.1:8000/monitoring/ (with `python manage.py runserver` running):
-
-   ```bash
-   python manage.py compute_metrics
-   ```
-
-### Which model is published
-
-`publish_predictions` serves `models/heart_disease_model.joblib`. Create it by training and promoting a run (see [Experiment tracking](#experiment-tracking)):
+### 6.4 Running each part
 
 ```bash
-python manage.py train_experiment
-python manage.py promote_run heart-disease-rf 1
-```
+# Step 1: baseline pipeline
+python ml/preprocesss.py
+python ml/train_model.py      # overwrites models/heart_disease_model.joblib: run promote_run again afterwards
+python ml/evaluate_model.py
 
-Running Khaliyah's `ml/train_model.py` also creates that file. Without the model or a CSV, `publish_predictions` publishes simulated predictions (version `simulated`).
+# Step 2: AI-powered deployment
+python -m deployment.cli --provider aws --description "Serve the heart disease model as a REST API on one small server" --output generated/test
 
-Each message's `model_version` is the promoted run's version (for example `v2`), or `v1` if no run has been promoted. `publish_predictions` loads the model when it starts, so run it again after promoting.
+# Step 3: monitoring (consumer in a second terminal)
+python manage.py consume_predictions
+python manage.py publish_predictions --count 100
+python manage.py publish_predictions --count 50 --drift
+python manage.py compute_metrics
 
-By default, it samples only the rows the model was **not** trained on. It repeats `train_experiment`'s split (drop duplicates, stratified split) with the promoted run's `test_size` and `random_state`, or 0.2 and 42 if there is no promoted run. Accuracy then matches the run's test accuracy (about 0.75 for the default settings). With `--all-rows`, most rows were in the training data, so accuracy looks much higher (about 0.95). The command prints which mode it used.
+# Step 4: experiment tracking
+python manage.py train_experiment --n-estimators 300 --max-depth 8   # logged as the next version
+python manage.py promote_run heart-disease-rf 2                      # serve version 2
 
-### Metrics and anomalies
+# Step 5: hyperparameter tuning
+python manage.py run_tuning --strategy random --trials 15
+python manage.py run_tuning --strategy llm --trials 15
 
-`compute_metrics` groups each model's predictions into windows of `--window-size` predictions (default 10), in the order they were made, and saves one `MetricSnapshot` per window with accuracy, average latency and count. It replaces that model's earlier snapshots, and leaves the last window out until it is full. A window is an anomaly when:
-
-- accuracy is more than 0.10 below the baseline, `MONITORING_BASELINE_ACCURACY` in `config/settings.py` (default 0.75, the model's test accuracy), or
-- average latency is more than double the median of the earlier windows.
-
-It then asks the LLM from `LLM_PROVIDER` for a short plain-English summary of the recent windows and saves it on the latest snapshot. If the LLM is unavailable, it saves a rule-based summary instead; `--no-llm` skips the summary.
-
-### Dashboard
-
-http://127.0.0.1:8000/monitoring/ shows, for one model (choose another from the menu when there are several):
-
-- total predictions, overall accuracy, average latency and the number of anomalous windows;
-- accuracy and latency per window, with the baseline as a dashed line and windows flagged by that chart's rule in red;
-- the latest saved summary (the page never calls the LLM itself);
-- the 20 most recent predictions, with their model version.
-
-Run `compute_metrics` again to update the charts and summary. Predictions and snapshots are also in the Django admin.
-
-## Experiment tracking
-
-The `experiments` app trains the heart disease model as numbered runs of an experiment, so you can compare settings and choose which version monitoring uses. Apply migrations first (`python manage.py migrate`).
-
-### Train a run
-
-```bash
-python manage.py train_experiment
-```
-
-This repeats the steps in Khaliyah's `ml/train_model.py` (drop duplicates, stratified train/test split, median imputer, scaler, random forest). It reads the first of `ml/data/heart.csv`, `data/heart.csv` or `heart.csv` that exists, or the CSV given with `--data`. It records train and test accuracy, precision, recall and F1, and saves the model to `models/runs/heart-disease-rf-v1.joblib`. The run is logged as v1 of the `heart-disease-rf` experiment.
-
-To try different settings, pass them as options. Each call becomes the next version and records what changed from the previous one:
-
-```bash
-python manage.py train_experiment --n-estimators 300 --max-depth 8
-```
-
-```
-Logged heart-disease-rf v2: v2: n_estimators 100→300, max_depth None→8; test accuracy 0.754→0.77, ...
-```
-
-| Option | Default |
-| --- | --- |
-| `--n-estimators` | `100` |
-| `--max-depth` | none (unlimited) |
-| `--min-samples-split` | `2` |
-| `--test-size` | `0.2` |
-| `--random-state` | `42` (used for the split and the forest) |
-| `--experiment` | `heart-disease-rf` |
-| `--data` | first of `ml/data/heart.csv`, `data/heart.csv`, `heart.csv` |
-| `--no-llm` | off |
-
-The version note is written by the LLM from `LLM_PROVIDER` (see `core/llm.py`). If the LLM is unavailable, gets the numbers wrong, or `--no-llm` is passed, the note is written from the changes in plain code instead. Runs, with their parameters, metrics, changes, data hash and git commit, are listed in the Django admin under Experiments.
-
-Other code can log runs the same way:
-
-```python
-from experiments.tracking import log_run
-
-run = log_run('heart-disease-rf', params={'n_estimators': 300}, metrics={'test_accuracy': 0.787},
-              checkpoint_path='models/runs/my-model.joblib', data_path='ml/data/heart.csv')
-```
-
-### Promote a run
-
-```bash
-python manage.py promote_run heart-disease-rf 2
-```
-
-This copies that run's model to `models/heart_disease_model.joblib`, the file `publish_predictions` serves, and records the experiment and version in `models/current_model.json`. To roll back, promote an earlier version.
-
-### The promoted version in monitoring
-
-`publish_predictions` loads the model when it starts, so run it again after promoting. Each prediction it publishes then has the promoted version as its `model_version` (for example `v2`), shown in the Version column of the recent predictions table at http://127.0.0.1:8000/monitoring/ and on `PredictionLog` rows in the admin. It samples that run's held-out test rows, so monitored accuracy is comparable with the run's test accuracy. See [Monitoring](#monitoring) for the options.
-
-### Web pages
-
-With `python manage.py runserver` running, http://127.0.0.1:8000/experiments/ lists each experiment with its number of runs, best test accuracy and promoted version. An experiment's page shows its run history: each version's changed settings, train and test accuracy and version note, plus a chart of train vs test accuracy per version (a large gap means overfitting). A run's page shows all its parameters, metrics, changes from the previous version, checkpoint, data hash and git commit. Its "Promote this version" button does the same as `promote_run`, but only for staff users: log in at http://127.0.0.1:8000/admin/ (create an account with `python manage.py createsuperuser`). The compare page puts two versions side by side, highlighting differences with +/- changes. Its "Explain the difference" button asks the LLM for a short explanation, checked against the real numbers, with a written-from-the-numbers fallback. Page loads never call the LLM.
-
-## Hyperparameter tuning
-
-The `tuning` app searches for better random forest settings. Each trial proposes a set of hyperparameters, scores them, and is logged as a run of an experiment, so it can be compared and promoted like any other run.
-
-```bash
-python manage.py run_tuning --strategy llm
-python manage.py run_tuning --strategy random
-```
-
-| Option | Default | Effect |
-| --- | --- | --- |
-| `--strategy` | `llm` | `llm`: the LLM from `LLM_PROVIDER` proposes each trial from the earlier trials' scores. `random`: random search, the baseline to compare against. |
-| `--trials` | `15` | Number of trials. |
-| `--cv` | `5` | Cross-validation folds. |
-| `--seed` | `42` | Seed for the train/test split, the folds, the forest and random proposals. The same seed gives the same random search. |
-| `--data` | first of `ml/data/heart.csv`, `data/heart.csv`, `heart.csv` | CSV with a `target` column. |
-
-The search space is `n_estimators` 50–500, `max_depth` 2–20 or none, `min_samples_split` 2–20, `min_samples_leaf` 1–10 and `max_features` `sqrt`, `log2` or none.
-
-### How trials are scored
-
-The data is split the same way as in `train_experiment` (drop duplicates, stratified 80/20 split). Each trial is scored by k-fold cross-validation accuracy on the **training rows only**, and the best trial is the one with the highest CV accuracy. Test accuracy is printed for reference but never used to choose settings, so it stays an honest estimate for new data.
-
-### LLM proposals
-
-With `--strategy llm`, the LLM sees the search space and every earlier trial's settings and CV score (never test accuracy). It replies with the next settings and a one-sentence reason.
-
-- If the settings are outside the search space, repeat an earlier trial, or the LLM is unavailable, a random proposal is used instead. The reason then starts with "Random fallback:" and says why.
-- If only the reason is wrong about what changed (for example "increase min_samples_split" when it went from 10 to 5), the LLM's settings are kept, but the reason is replaced by a code-written description of the change that notes the failed check.
-
-Each trial prints its settings, CV accuracy and reason:
-
-```
-Trial 2/15 [llm] {"n_estimators": 200, "max_depth": 15, "min_samples_split": 5, "min_samples_leaf": 2, "max_features": "log2"}
-  CV accuracy 0.8504 ± 0.0640 (best so far); test accuracy 0.7705 (reference only)
-  Changed n_estimators 300→200, max_depth None→15, ... The LLM's reason failed the fact check (...).
-```
-
-At the end it prints the best trial, the trial number where it was found, and the command to promote it.
-
-### Trials on the experiments pages
-
-Trials are logged under the experiment `heart-disease-rf-tuning-llm` or `heart-disease-rf-tuning-random`, one version per trial (later jobs continue the numbering). At http://127.0.0.1:8000/experiments/ each trial shows its settings, train and test accuracy and, as its version note, the tuning job, trial number, CV accuracy and reason. Use the compare page to see two trials side by side. Tuning jobs and their trials are also listed in the Django admin under Tuning.
-
-### Promote the best trial
-
-`run_tuning` ends with the command for its best trial, for example:
-
-```bash
-python manage.py promote_run heart-disease-rf-tuning-llm 2
-```
-
-Staff users can also use the "Promote this version" button on the trial's run page. As with any promoted run, restart `publish_predictions` to serve it. It then samples the same held-out test rows the trial was scored against.
-
-### Tuning pages
-
-http://127.0.0.1:8000/tuning/ lists the tuning jobs with their strategy, number of trials, best CV accuracy ± std, the trial where it was found, that trial's test accuracy (reference only), status and date. A job's page charts the CV accuracy of each trial with a "best so far" line, and lists the trials with their proposer, settings, scores and reason, best trial highlighted; each trial links to its run on the experiments pages, where it can be promoted. The compare page (http://127.0.0.1:8000/tuning/compare/) charts the best CV accuracy so far for an LLM job against a random job, defaulting to the latest of each, with a summary of best score, trial found, time taken, random fallbacks and how many LLM reasons passed the fact check. On a job's page, staff users (log in at `/admin/`) can press "Suggest next experiments" to ask the LLM for 3 new configurations, each checked to be inside the search space and untried, with its reason fact-checked against the best trial. The suggestions are saved on the job, so reloading the page doesn't ask again. "Try this" on a suggestion runs one trial with those settings on the job's data and adds it to the job. Page loads never call the LLM.
-
-## Testing
-
-```bash
+# Step 6: tests, coverage and benchmark
 python manage.py test
+python -m coverage run manage.py test
+python -m coverage report
 python manage.py benchmark
 ```
 
-See the [testing and performance report](docs/TESTING.md) for smoke and lifecycle integration coverage, per-app coverage, benchmark measurements and limitations.
+Use `python -m coverage`, not plain `coverage`. Plain `coverage` can run under a different Python install that cannot see Django, and then reports 0%.
+
+### 6.5 Main pages
+
+| Page | URL |
+|---|---|
+| Home | `/` |
+| Deployments | `/deployments/` |
+| Monitoring dashboard | `/monitoring/` |
+| Experiments | `/experiments/` |
+| Tuning jobs and comparison | `/tuning/`, `/tuning/compare/` |
+| Admin | `/admin/` |
+
+---
+
+## 7. Repository structure
+
+```text
+gen-5-project/
+├── config/            Django settings and URLs
+├── core/              Home page, shared LLM helper, smoke/demo/performance tests, benchmark command
+├── deployment/        Terraform generator (CLI + /deployments/ page)
+├── monitoring/        RabbitMQ publisher/consumer, metrics, anomaly rules, dashboard
+├── experiments/       Experiment and Run models, training, versioning, promotion, lifecycle test
+├── tuning/            Search space, scoring, LLM proposer, reason check, tuning pages
+├── ml/                Baseline pipeline (preprocessing, training, evaluation, graphs) and data/heart.csv
+├── assets/            Confusion matrix, feature importance, evaluation_results.json
+├── generated/         Sample Terraform configs (aws/, gcp/)
+├── demo/              Read-only database snapshot for the live demo
+├── bin/               render_start.sh (live demo start script)
+├── docs/              demo.gif, TESTING.md, benchmarks/
+├── templates/         Base layout and home page
+├── docker-compose.yml RabbitMQ
+├── requirements.txt   Pinned dependencies
+└── .env.example       Environment variable template
+```
+
+---
+
+## 8. Team and contributions
+
+| Member | GitHub | Commits | Contributions |
+|---|---|---:|---|
+| Khaliyah S. Paen | [@khpae1-beep](https://github.com/khpae1-beep) | 6 | Step 1 data and ML pipeline (preprocessing, training, evaluation, charts, dataset); Step 2 AI-powered Terraform deployment generator and CLI; repository owner |
+| Sandeep Shah | [@sande231](https://github.com/sande231) | 70 | Django base project and RabbitMQ setup; Step 3 monitoring; Step 4 experiment tracking; Step 5 hyperparameter tuning (took over from Tah, who had no laptop); deployment web page and LLM-output fix; live demo deployment; integration and code review |
+| Tah Soh | [@Zagadad237](https://github.com/Zagadad237) | 5 | Step 6 testing and optimization: smoke tests, lifecycle integration tests, benchmark command, coverage configuration, performance analysis and `docs/TESTING.md` (done from a library computer with GitHub Codespaces) |
+
+Commits are non-merge commits on all branches, from `git shortlog -sn --all --no-merges`.
+
+### Git workflow
+
+```mermaid
+flowchart LR
+    A["main"] --> B["feature branch<br/>one per task"]
+    B --> C["Commits"]
+    C --> D["Pull request"]
+    D --> E["Review and local merge test"]
+    E --> F["Merge commit into main"]
+    F --> A
+```
+
+- One feature branch per task (for example `feature/member2-monitoring`, `feature/tuning-ui`, `feature/deployment-app`, `feature/member3-testing`).
+- Every change reached `main` through a pull request merged with a merge commit, so each member's commits stay visible in the history.
+- Before merging a teammate's branch, it was test-merged locally on a throwaway branch and the full test suite was run.
+
+---
+
+## 9. Live demo deployment
+
+The live demo runs on Render's free tier from this repository at **https://gen-5-project.onrender.com**:
+
+- **Build command:** `pip install -r requirements.txt && python manage.py collectstatic --noinput`
+- **Start command:** `bash bin/render_start.sh`. It copies `demo/demo.sqlite3` to `DB_PATH`, runs migrations and starts gunicorn.
+- **Environment:** `PYTHON_VERSION=3.12.3`, `DJANGO_DEBUG=False`, a random `DJANGO_SECRET_KEY` and `DB_PATH=/tmp/demo.sqlite3`.
+
+The start script refuses to run without `DB_PATH`, so it never overwrites a local `db.sqlite3`. Render's own host name is allowed automatically; for a custom domain, set `DJANGO_ALLOWED_HOSTS` and `DJANGO_CSRF_TRUSTED_ORIGINS`. To try the same setup locally:
+
+```bash
+DJANGO_DEBUG=False python manage.py collectstatic --noinput
+DB_PATH=/tmp/demo.sqlite3 PORT=8000 DJANGO_DEBUG=False bash bin/render_start.sh
+```
+
+The snapshot contains real project data (experiments, tuning jobs, predictions and monitoring windows) with all user accounts removed. Visitors cannot log in, so the promote, suggest and generate actions are disabled. LLM features need a local Ollama and show their fallbacks online. The demo resets to the snapshot whenever the service restarts.
+
+---
+
+## 10. Limitations and future work
+
+**Limitations**
+
+- Small dataset (302 unique rows), so differences of about 0.02 in accuracy are within noise (CV standard deviation ±0.06).
+- Generated Terraform is validated but has not been applied to a live cloud account.
+- SQLite and a single machine; no concurrency or load testing.
+- A local 8B-parameter LLM is slow and its output often fails the fact checks. The safeguards keep features correct but limit the LLM's value.
+
+**Future work**
+
+- Apply generated configurations in a sandbox AWS or GCP account and serve the model as an API.
+- Retrain automatically when monitoring flags drift, then compare and promote through experiment tracking.
+- Evaluate LLM-guided tuning on larger datasets and stronger models.
+- Run the test suite in GitHub Actions on every pull request.
+- PostgreSQL, user roles, and email or Slack alerts for flagged windows.
+
+---
+
+## 11. Use of AI tools
+
+We used AI coding assistants (Claude Code and GitHub Copilot) to help write and review code, tests and documentation. Commits made with Claude Code carry a `Co-Authored-By: Claude` trailer. Team members designed the features, reviewed and tested every change, and are responsible for the results reported here. The LLM inside the application (Ollama `llama3.1:8b` through LangChain) is a component of the system, as described in section 4.7.
+
+---
+
+## 12. References
+
+1. D. Lapp, *Heart Disease Dataset*, Kaggle. https://www.kaggle.com/datasets/johnsmith88/heart-disease-dataset
+2. A. Janosi, W. Steinbrunn, M. Pfisterer, R. Detrano, *Heart Disease*, UCI Machine Learning Repository, 1988. https://archive.ics.uci.edu/dataset/45/heart+disease
+3. Django documentation. https://docs.djangoproject.com/en/4.2/
+4. LangChain documentation. https://python.langchain.com/
+5. scikit-learn: Pedregosa et al., "Scikit-learn: Machine Learning in Python," *JMLR* 12, 2011. https://scikit-learn.org/
+6. RabbitMQ documentation. https://www.rabbitmq.com/docs
+7. Terraform documentation. https://developer.hashicorp.com/terraform/docs
+8. Ollama. https://ollama.com/
